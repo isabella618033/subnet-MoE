@@ -40,7 +40,6 @@ class AttnImpl(str, Enum):
 
 class RunCfg(BaseModel):
     run_name: str = "centralised"
-    port: int = Field(29500, ge=1, le=65535)
     miner_uid: int = 1
 
 
@@ -57,6 +56,8 @@ class DataCfg(BaseModel):
     batch_size: PositiveInt = 512
     sequence_length: PositiveInt = 1024
     per_device_train_batch_size: PositiveInt = 5
+    world_size: int = 10 #TODO
+    rank: int = 1 #TODO
 
 
 class MoECfg(BaseModel):
@@ -73,6 +74,7 @@ class MoECfg(BaseModel):
     partial_moe: bool = True
     num_worker_groups: PositiveInt = 2
     rotate_expert: bool = False
+    expert_rotate_interval: Optional[PositiveInt] = None
 
 
 class OptimizerCfg(BaseModel):
@@ -81,9 +83,12 @@ class OptimizerCfg(BaseModel):
     outer_momentum: float = 0.9
 
 
-class ParallelismCfg(BaseModel):
-    gradient_accumulation_steps: Optional[PositiveInt] = None
+class ParallelismCfg(BaseModel):# parallelism for local training
+    gradient_accumulation_steps: PositiveInt = 0
     global_opt_interval: PositiveInt = 100
+    world_size: PositiveInt = 2
+    port: PositiveInt = 29500
+    ip_address: str = "127.0.0.1" 
 
     @staticmethod
     def _cuda_device_count_safe() -> int:
@@ -113,7 +118,7 @@ class LoggingCfg(BaseModel):
     wandb_resume: bool = False
     wandb_full_id: str = "oo2vn2v4"
     wandb_partial_id: List[Optional[str]] = ["3q8mckj8"]
-    base_metric_path: Path = Path("./dimoe/metrics")
+    base_metric_path: Path = Path("./mycelia/metrics")
     metric_path: Optional[Path] = None
     metric_interval: Optional[PositiveInt] = None
 
@@ -124,7 +129,7 @@ class LoggingCfg(BaseModel):
 
 class Config(BaseModel):
     """
-    Centralized training/eval configuration for DiMoE runs.
+    Centralized training/eval configuration for mycelia runs.
 
     - Inputs grouped into sections
     - Derived fields computed lazily
@@ -135,7 +140,7 @@ class Config(BaseModel):
     data: DataCfg = DataCfg()
     moe: MoECfg = MoECfg()
     opt: OptimizerCfg = OptimizerCfg()
-    par: ParallelismCfg = ParallelismCfg()
+    local_par: ParallelismCfg = ParallelismCfg()
     sched: ScheduleCfg = ScheduleCfg()
     ckpt: CheckpointCfg = CheckpointCfg()
     log: LoggingCfg = LoggingCfg()
@@ -147,10 +152,10 @@ class Config(BaseModel):
     @model_validator(mode="after")
     def _derive_all(self):
         # 1) Derived parallelism pieces that depend on data cfg
-        if self.par.gradient_accumulation_steps is None:
+        if self.local_par.gradient_accumulation_steps == 0:
             # ceil(batch_size / per_device_train_batch_size)
             g = math.ceil(self.data.batch_size / self.data.per_device_train_batch_size)
-            self.par.gradient_accumulation_steps = max(1, int(g))
+            self.local_par.gradient_accumulation_steps = max(1, int(g))
 
         # 2) Derived paths from run_name
         if self.ckpt.checkpoint_path is None:
@@ -160,13 +165,15 @@ class Config(BaseModel):
             self.log.metric_path = self.log.base_metric_path / f"{self.run.run_name}.csv"
 
         # 3) Interval defaults relative to global_opt_interval
-        goi = self.par.global_opt_interval
+        goi = self.local_par.global_opt_interval
         if self.ckpt.checkpoint_interval is None:
             self.ckpt.checkpoint_interval = max(1, round(goi * 0.2))
         if self.ckpt.full_validation_interval is None:
             self.ckpt.full_validation_interval = max(1, round(goi * 0.2))
         if self.log.metric_interval is None:
             self.log.metric_interval = max(1, round(goi * 0.2))
+        if self.moe.expert_rotate_interval is None:
+            self.moe.expert_rotate_interval = max(1, round(goi))
 
         logger.info(self.__str__())
         return self
@@ -310,7 +317,7 @@ class Config(BaseModel):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train DiMoE with config")
+    parser = argparse.ArgumentParser(description="Train mycelia with config")
     parser.add_argument(
         "--path",
         type=str,

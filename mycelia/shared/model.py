@@ -11,6 +11,7 @@ import torch
 from torch import nn
 
 from mycelia.config import Config
+from mycelia.miner.checkpoint import get_resume_info
 from mycelia.shared.logging import structlog  
 from mycelia.shared.expert_manager import ExpertManager, create_expert_groups 
 from mycelia.shared.modeling_moe import get_base_model  , partial_moe
@@ -18,8 +19,13 @@ from mycelia.shared import blockchain
 
 logger = structlog.get_logger(__name__)
 
-def _default_model(rank:int, config: Config) -> nn.Module:
-    start_step = 0   
+def _default_model(config: Config) -> nn.Module:
+    resume = False   
+    start_step = 0
+    latest_checkpoint_path = None
+    if getattr(config, "resume_from_ckpt", False):
+        resume, start_step, latest_checkpoint_path = get_resume_info(config)
+
     em = ExpertManager(
         model=get_base_model(config, noise= True),
         rank=rank,
@@ -29,15 +35,25 @@ def _default_model(rank:int, config: Config) -> nn.Module:
     em.compute_group_assignments(seed=start_step if config.moe.rotate_expert else 0)
 
     model = get_base_model(config, noise=start_step == 0, expert_group_assignment=em.expert_group_assignment).to(config.model.device)
-    
+
+    # model has to be loaded before partitioning into moe
+    if getattr(config, "resume_from_ckpt", False) and resume and latest_checkpoint_path:
+        logger.info(
+            "rank %s setup training: resuming from %s (start_step=%s)", rank, latest_checkpoint_path, start_step
+        )
+        _ = load_checkpoint(
+            config=config, checkpoint_path=latest_checkpoint_path, model=model, rank=rank, device=config.model.device
+        )
+
     if getattr(config, "partial_moe", False):
         model = partial_moe(config, model, config.moe.my_expert_group_id, em.expert_group_assignment)
 
     model = model.to(config.model.device)
 
-    return model
+    return model, em
 
 
+# TODO
 def _fetch_validator_endpoint_from_chain(round_hint: Optional[str] = None) -> Optional[str]:
     """
     Ask chain for the *current* validator node endpoint (e.g., https://validator-1:8080).
@@ -51,7 +67,7 @@ def _fetch_validator_endpoint_from_chain(round_hint: Optional[str] = None) -> Op
         logger.warning("model.chain_lookup_failed", error=str(e))
         return None
 
-
+# TODO
 def _ping_validator_and_get_manifest(api_base: str, timeout: float = 5.0) -> Optional[dict]:
     """
     Ping validator and retrieve a model manifest:
@@ -70,7 +86,7 @@ def _ping_validator_and_get_manifest(api_base: str, timeout: float = 5.0) -> Opt
         logger.info("model.validator_unreachable", api_base=api_base, error=str(e))
         return None
 
-
+# TODO
 def _download_artifact(manifest: dict, settings: Settings) -> bytes:
     """
     Download the model artifact. Supports:
@@ -90,7 +106,7 @@ def _download_artifact(manifest: dict, settings: Settings) -> bytes:
     logger.info("model.downloading_via_storage", uri=uri)
     return get_bytes(uri)  # your storage backend should handle s3://, file://, ipfs://, etc.
 
-
+# TODO
 def _load_from_blob(blob: bytes, fmt: str, device: str) -> nn.Module:
     """
     Convert blob -> model instance.
@@ -106,7 +122,7 @@ def _load_from_blob(blob: bytes, fmt: str, device: str) -> nn.Module:
     return model
 
 
-def load_base(config: Optional[Config] = None, round_hint: Optional[str] = None) -> nn.Module:
+def load_base_model(config: Optional[Config] = None, round_hint: Optional[str] = None) -> Tuple[nn.Module, ExpertManager]:
     """
     Main entry point used by miners (and potentially validator itself).
     1) Ask the chain for an active validator endpoint.
@@ -131,7 +147,7 @@ def load_base(config: Optional[Config] = None, round_hint: Optional[str] = None)
     return _default_model(rank = config.run.miner_uid, config = config)
 
 # --- Helper: export/save current model to artifact (used by validator) ---
-
+# TODO
 def export_model_artifact(model: nn.Module) -> Tuple[bytes, str]:
     """
     Serialize the model to bytes + return format string.

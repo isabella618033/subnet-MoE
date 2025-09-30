@@ -5,7 +5,7 @@ and provide helpers for partial (grouped) expert execution.
 Contents
 --------
 - DenseBlock: wraps Qwen3Moe MLP to behave like a "dense" block while preserving API
-- DimoeSparseMoeBlock: sparse MoE block that activates only a subset of experts (by group)
+- myceliaSparseMoeBlock: sparse MoE block that activates only a subset of experts (by group)
 - CustomMoE: an Qwen3Moe model variant that interleaves MoE and dense blocks
 - get_base_model: load base LLaMA or OLMo, optionally convert to MoE
 - get_base_tokenizer: load tokenizer (HF login via env var if provided)
@@ -170,7 +170,7 @@ class MyceliaMoE(Qwen3MoeForCausalLM):
     Qwen3Moe variant that interleaves MoE and dense blocks and optionally restricts experts
     to those owned by the calling group.
 
-    If `partial=True`, MoE blocks become `DimoeSparseMoeBlock` limited to the group’s experts.
+    If `partial=True`, MoE blocks become `myceliaSparseMoeBlock` limited to the group’s experts.
     Otherwise, standard `SparseMoeBlock` is used for MoE layers.
     """
 

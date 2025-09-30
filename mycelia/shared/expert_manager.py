@@ -226,7 +226,7 @@ def _named_params(model: nn.Module) -> Dict[str, nn.Parameter]:
     return dict(model.named_parameters())
 
 
-def sync_shared_weights(rank: int, global_model: nn.Module, model: nn.Module) -> None:
+def sync_weights(rank: int, global_model: nn.Module, model: nn.Module, shared_only: bool = False) -> None:
     """
     Average the differences for *shared* (non-expert) parameters across all ranks.
 
@@ -249,7 +249,7 @@ def sync_shared_weights(rank: int, global_model: nn.Module, model: nn.Module) ->
     global_named = _named_params(global_model)
 
     for name, p in local_named.items():
-        if is_expert_param(name):
+        if shared_only and is_expert_param(name):
             continue
         g = global_named.get(name)
         if g is None:
