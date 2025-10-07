@@ -36,7 +36,7 @@ from torch.futures import Future
 from mycelia.shared.logging import structlog
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import get_base_model
-from mycelia.shared.modeling_moe import get_base_tokenizer
+from mycelia.shared.modeling.modeling_mycelia import get_base_tokenizer
 from mycelia.shared.datasets import get_dataloader
 from mycelia.shared.expert_manager import ExpertManager
 

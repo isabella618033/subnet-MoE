@@ -14,7 +14,7 @@ from mycelia.config import Config
 from mycelia.shared.checkpoint import get_resume_info
 from mycelia.shared.logging import structlog  
 from mycelia.shared.expert_manager import ExpertManager, create_expert_groups 
-from mycelia.shared.modeling_moe import get_base_model  , partial_moe
+from mycelia.shared.modeling.modeling_mycelia import get_base_model  , partial_moe
 from mycelia.shared import blockchain
 from mycelia.shared.helper import *
 

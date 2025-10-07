@@ -84,7 +84,7 @@ class OptimizerCfg(BaseModel):
 
 
 class ParallelismCfg(BaseModel):# parallelism for local training
-    gradient_accumulation_steps: PositiveInt = 0
+    gradient_accumulation_steps: PositiveInt = 100
     global_opt_interval: PositiveInt = 100
     world_size: PositiveInt = 2
     port: PositiveInt = 29500
@@ -258,32 +258,56 @@ class Config(BaseModel):
             return f"{base}-v{int(ver) + 1}" if ver else f"{base}-v2"
         return name + "-v2"
 
+    def _norm(self, v: Any) -> Any:
+        # Optional: normalize types that often differ but mean the same thing
+        if isinstance(v, Path):
+            return v.as_posix()
+        return v
+
+    def _deep_compare(self, a: Any, b: Any, path: str = "") -> bool:
+        ok = True
+
+        # Dict vs dict: recurse by keys
+        if isinstance(a, dict) and isinstance(b, dict):
+            a_keys, b_keys = set(a.keys()), set(b.keys())
+            missing = a_keys - b_keys
+            extra   = b_keys - a_keys
+            if missing:
+                logger.info(f"Keys present in self but missing in other at '{path}': {missing}")
+                ok = False
+            if extra:
+                logger.info(f"Keys present in other but missing in self at '{path}': {extra}")
+                ok = False
+            for k in sorted(a_keys & b_keys):
+                if not self._deep_compare(a[k], b[k], f"{path}.{k}" if path else k):
+                    ok = False
+            return ok
+
+        # Sequence vs sequence: compare length then elementwise
+        if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+            if len(a) != len(b):
+                logger.info(f"Length mismatch at '{path}': existing {len(b)} vs new {len(a)}")
+                return False
+            for i, (ai, bi) in enumerate(zip(a, b)):
+                if not self._deep_compare(ai, bi, f"{path}[{i}]"):
+                    ok = False
+            return ok
+
+        # Base case: compare normalized scalars/others
+        a_n, b_n = self._norm(a), self._norm(b)
+        if a_n != b_n:
+            logger.info(f"Config mismatch at '{path}': existing {b_n} vs new {a_n}")
+            return False
+        return True
+
     # ---- Comparison & versioning ----
     def same_as(self, other: Dict) -> bool:
         """
-        Return True if configs are equivalent.
-
-        This compares key sets and values. It assumes `other` is a dict produced by
-        the same schema (e.g., read from a previous `config.json`).
+        Return True if configs are equivalent (deep comparison).
+        `other` is a dict (possibly nested) from the same schema.
         """
-        self_keys = set(self.dict().keys())
-        other_keys = set(other.keys())
-
-        if self_keys != other_keys:
-            missing_in_other = self_keys - other_keys
-            extra_in_other = other_keys - self_keys
-            if missing_in_other:
-                logger.info(f"Keys present in self but missing in other: {missing_in_other}")
-            if extra_in_other:
-                logger.info(f"Keys present in other but missing in self: {extra_in_other}")
-            return False
-
-        equal = True
-        for k, v in self.dict().items():
-            if v != other[k]:
-                logger.info(f"Config mismatch {k}: existing {other[k]} vs new {v}")
-                equal = False
-        return equal
+        self_dict = self.to_dict()
+        return self._deep_compare(self_dict, other)
 
     def bump_run_name_if_diff(self, other: Dict) -> bool:
         """

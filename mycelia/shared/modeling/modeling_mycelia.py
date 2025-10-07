@@ -55,7 +55,7 @@ from transformers.modeling_outputs import MoeCausalLMOutputWithPast
 
 from mycelia.config import Config
 from mycelia.shared.logging import structlog  
-from mycelia.shared.deepseek.modeling_deepseek import DeepseekAttention  
+from mycelia.shared.modeling.modeling_deepseek import DeepseekAttention  
 from mycelia.shared.helper import *  
 
 logger = structlog.get_logger(__name__)
