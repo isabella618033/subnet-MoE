@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from mycelia.settings import Settings
 from mycelia.shared.model import export_model_artifact, TinyMLP
-from mycelia.shared.logging import structlog
+from mycelia.shared.app_logging import structlog
 from mycelia.shared.storage import put_bytes  # optional if you want to also publish to remote storage
 
 logger = structlog.get_logger(__name__)

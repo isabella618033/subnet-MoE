@@ -595,7 +595,6 @@ class DeepseekAttention(nn.Module):
 
         return attn_output, (attn_weights, past_key_value)
 
-
 # Copied from transformers.models.llama.modeling_llama.LlamaFlashAttention2 with Llama->Deepseek
 class DeepseekFlashAttention2(DeepseekAttention):
     """
