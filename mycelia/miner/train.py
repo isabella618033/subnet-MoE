@@ -20,7 +20,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import get_cosine_schedule_with_warmup, PreTrainedTokenizerBase
 
 from mycelia.config import Config, parse_args
-from mycelia.shared.logging import structlog, configure_logging
+from mycelia.shared.app_logging import structlog, configure_logging
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import load_base_model 
 from mycelia.shared.modeling.modeling_mycelia import get_base_tokenizer, partial_moe

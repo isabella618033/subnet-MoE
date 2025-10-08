@@ -54,7 +54,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 from transformers.modeling_outputs import MoeCausalLMOutputWithPast
 
 from mycelia.config import Config
-from mycelia.shared.logging import structlog  
+from mycelia.shared.app_logging import structlog  
 from mycelia.shared.modeling.modeling_deepseek import DeepseekAttention  
 from mycelia.shared.helper import *  
 
@@ -86,7 +86,6 @@ class TopkRouter(DeepseekV3TopkRouter):
     
     # @torch.no_grad()
     def get_topk_indices(self, scores):
-
         scores_for_choice = scores.view(-1, self.n_routed_experts) + self.e_score_correction_bias.unsqueeze(0)
         group_scores = (
             scores_for_choice.view(-1, self.n_group, self.n_routed_experts // self.n_group)
@@ -166,6 +165,7 @@ class SparseMoeBlock(DeepseekV3MoE):
 
         self.gate = TopkRouter(config, self.available_experts)
 
+    # TODO: double check is there any customization here, may remove
     def moe(self, hidden_states: torch.Tensor, topk_indices: torch.Tensor, topk_weights: torch.Tensor):
         r"""
         CALL FOR CONTRIBUTION! I don't have time to optimise this right now, but expert weights need to be fused

@@ -7,7 +7,7 @@ from __future__ import annotations
 import typer
 from typing import Optional
 
-from mycelia.shared.logging import configure_logging, log
+from mycelia.shared.app_logging import configure_logging, log
 from mycelia.settings import Settings
 from service import run as run_service
 

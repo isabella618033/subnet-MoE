@@ -5,7 +5,7 @@ from copy import deepcopy
 from mycelia.config import Config
 from fsspec.generic import GenericFileSystem
 from torchdata.stateful_dataloader import StatefulDataLoader
-from mycelia.shared.logging import structlog
+from mycelia.shared.app_logging import structlog
 
 logger = structlog.getLogger(__name__)
 
@@ -31,8 +31,9 @@ def get_resume_info(rank: int, config: Config) -> tuple[bool, int, str | None]:
         # Using fsspec to list directory contents
         fs = GenericFileSystem()
         try:
-            ckpt_files = [f for f in fs.ls(config.ckpt.checkpoint_path, detail=False) if filter_ckpt_files(f)]
-
+            fs, root = fsspec.core.url_to_fs(config.ckpt.checkpoint_path)  # root has no protocol
+            ckpt_files = fs.ls(root, detail=False)
+            ckpt_files = [f for f in ckpt_files if filter_ckpt_files(f)]
         except FileNotFoundError:
             logger.info(f"rank {rank}: Checkpoint path {config.ckpt.checkpoint_path} not found, starting from scratch")
             return False, 0, None
@@ -210,6 +211,7 @@ def load_checkpoint(
     if model is not None:
         full_state_dict = {}
         model_files = fsspec.open_files(os.path.join(checkpoint_path, "model*.pt"), mode="rb")
+        model_files += fsspec.open_files(os.path.join(checkpoint_path, "model.pt"), mode="rb")
         for f in model_files:
             with f as fh:
                 state_dict = torch.load(fh, map_location=torch.device("cpu"))

@@ -26,7 +26,7 @@ import torch.distributed as dist
 import torch.nn as nn
 
 from mycelia.shared.modeling.modeling_mycelia import get_layer_expert_id
-from mycelia.shared.logging import structlog
+from mycelia.shared.app_logging import structlog
 
 logger = structlog.getLogger(__name__)
 

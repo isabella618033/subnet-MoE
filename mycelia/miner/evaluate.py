@@ -33,7 +33,7 @@ import logging
 
 from torch.distributed import rpc
 from torch.futures import Future
-from mycelia.shared.logging import structlog
+from mycelia.shared.app_logging import structlog
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import get_base_model
 from mycelia.shared.modeling.modeling_mycelia import get_base_tokenizer

@@ -1,10 +1,9 @@
 # llm_weightnet/shared/logging.py
 from __future__ import annotations
 
-import logging
 import sys
 import os
-
+import logging
 import structlog
 
 
@@ -20,7 +19,7 @@ def configure_logging() -> None:
     fmt   = "pretty"
     use_utc = True
 
-    # 1) stdlib baseline so third-party libs (uvicorn, requests) show up
+    # # 1) stdlib baseline so third-party libs (uvicorn, requests) show up
     logging.basicConfig(stream=sys.stdout, level=level, format="%(message)s")
 
     # 2) structlog processors (common)
