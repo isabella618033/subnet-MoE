@@ -230,7 +230,7 @@ def _named_params(model: nn.Module) -> Dict[str, nn.Parameter]:
     return dict(model.named_parameters())
 
 
-def sync_weights(rank: int, global_model: nn.Module, model: nn.Module, shared_only: bool = False) -> None:
+def populate_global_grads_from_local(global_model: nn.Module, model: nn.Module, shared_only: bool = False, weight: float = 0.2) -> None:
     """
     Average the differences for *shared* (non-expert) parameters across all ranks.
 
@@ -246,9 +246,6 @@ def sync_weights(rank: int, global_model: nn.Module, model: nn.Module, shared_on
     * We avoid relying on parameter iteration order by matching by name.
     * Uses `.data` to avoid autograd tracking (intentional, as these are sync ops).
     """
-    if not dist.is_available() or not dist.is_initialized():
-        raise RuntimeError("torch.distributed must be initialized before sync")
-
     local_named = _named_params(model)
     global_named = _named_params(global_model)
 
@@ -257,12 +254,25 @@ def sync_weights(rank: int, global_model: nn.Module, model: nn.Module, shared_on
             continue
         g = global_named.get(name)
         if g is None:
-            logger.warning(f"[rank {rank}] Shared param '{name}' not found in global model; skipping.")
+            logger.warning(f"Shared param '{name}' not found in global model; skipping.")
             continue
 
-        # Compute difference and average it across all ranks into g.grad
         diff = g.data - p.data
-        g.grad = diff  # store in .grad for a later optimizer step on global_model
+        if g.grad is None:
+            g.grad = diff * weight
+        else:
+            g.grad += diff * weight
+
+def sync_weights(rank: int, global_model: nn.Module, shared_only: bool = False) -> None:
+    if not dist.is_available() or not dist.is_initialized():
+        raise RuntimeError("torch.distributed must be initialized before sync")
+
+    global_named = _named_params(global_model)
+
+    for name, g in global_named.items():
+        if shared_only and is_expert_param(name):
+            continue
+
         dist.all_reduce(g.grad, op=dist.ReduceOp.AVG)
 
 

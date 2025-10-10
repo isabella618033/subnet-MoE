@@ -5,10 +5,11 @@ import time
 import logging
 import json
 import fsspec
+import copy
 import datetime
 from functools import partial
 import copy
-from typing import Tuple, Union, Optional, Dict, Any
+from typing import Tuple, Union, Optional, Dict, Any, List
 from collections.abc import Iterable, Sequence
 
 import torch
@@ -42,10 +43,11 @@ from mycelia.shared.expert_manager import (
     sync_weights,
     get_weight_sum,
     broadcast_weights,
+    populate_global_grads_from_local,
 )
 from mycelia.shared.helper import *
 from mycelia.validator.aggregator import MinerScoreAggregator
-from mycelia.validator.evaluator import run_evaluation, gather_miner_info
+from mycelia.validator.evaluator import run_evaluation, gather_miner_info, MinerInfo
 
 configure_logging()
 logger = structlog.get_logger(__name__)
@@ -198,6 +200,7 @@ def run_global_optimization(
         rank: int,
         logp: callable,
         outer_optimizer: torch.optim.Optimizer,
+        miners: List[MinerInfo],
 ):
     
     # --- sync + outer step ---
@@ -207,9 +210,11 @@ def run_global_optimization(
     old_shared_name, old_shared_sum = get_weight_sum(model, shared=True)
     old_expert_name, old_expert_sum = get_weight_sum(model, shared=False)
 
-    dist.barrier(device_ids=[rank])
+    # dist.barrier(device_ids=[rank])
     logp("start syncing shared weights")
-    sync_weights(rank, global_model, model, shared_only = False)
+
+    populate_global_grads_from_every_local(config, global_model, miners)
+    # TODO: sync grad across validators
 
     outer_optimizer.step()
     outer_optimizer.zero_grad()
@@ -225,7 +230,7 @@ def run_global_optimization(
         f"outer optimizer step (shared) {old_shared_name}, {old_shared_sum:.8f} "
         f"-> {new_shared_name}, {new_shared_sum:.8f}"
     )
-    dist.barrier(device_ids=[rank])
+    # dist.barrier(device_ids=[rank])
     logp(
         f"outer optimizer step (expert) {old_expert_name}, {old_expert_sum:.8f} "
         f"-> {new_expert_name}, {new_expert_sum:.8f}"
@@ -238,6 +243,15 @@ def run_global_optimization(
     del new_expert_name, new_expert_sum
     gc.collect()
     torch.cuda.empty_cache()
+
+
+def populate_global_grads_from_every_local(config, global_model, miners):
+    for miner in miners: 
+        miner_model = copy.deepcopy(global_model) 
+        path =config.vali.miner_submission_path / f"{miner.uid}_{miner.hotkey}.pt"
+        sd = torch.load(path, map_location=torch.device("cpu"))['model_state_dict']
+        miner_model.load_state_dict(sd, strict = False)
+        populate_global_grads_from_local(global_model, miner_model, weight = 1 / len(miners))
 
 def run(rank: int, world_size: int, config: MinerConfig) -> None:
     """
@@ -321,12 +335,15 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
 
                 logger.info(f"rank {rank} | gloabl_opt {global_opt_step} | {msg}")
 
+            # === Get miner ===
+            miners = gather_miner_info()
+
+            # === Download miner model and evaluate the miners ===
             asyncio.run(run_evaluation(
                 config = config,
                 step = global_opt_step,
                 device = model.device,
-                miners = gather_miner_info(),
-                # eval_dataloader = eval_dataloader,
+                miners = miners,
                 aggregator = aggregator,
                 base_model = model,
                 tokenizer = tokenizer
@@ -334,31 +351,17 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
 
             logp(msg = "eval result" + str(aggregator.uid_score_pairs()))
 
-            # === Log metric ===
-            logp(f"optimizer step", loss_batch, aux_loss_batch)
-            metrics = get_status(
-                config = config,
+            # === global optimizer ===
+            logp(f"reached global opt barrier", loss_batch, aux_loss_batch)
+            run_global_optimization(
                 model = model,
-                step = global_opt_step,
-                inner_opt_step = None,
-                global_opt_step = global_opt_step,
-                training_time = training_time,
-                total_training_time = total_training_time,
-                loss_batch=loss_batch,
-                aux_loss_batch=aux_loss_batch,
+                global_model = global_model,
+                device = device,
+                rank = rank,
+                logp = logp,
+                outer_optimizer = outer_optimizer,
+                miners = miners,
             )
-            metric_logger.log(metrics, print_log=False)
-
-            # # === global optimizer ===
-            # logp(f"reached global opt barrier", loss_batch, aux_loss_batch)
-            # run_global_optimization(
-            #     model = model,
-            #     global_model = global_model,
-            #     device = device,
-            #     rank = rank,
-            #     logp = logp,
-            #     outer_optimizer = outer_optimizer,
-            # )
 
             # === validation and log metric ===
             logp(f"reached barrier, waiting for partial evaluation")
@@ -393,7 +396,7 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
 
             # === save checkpoint ===
             logp(f"saving checkpoint")
-            ckpt_path = os.path.join(config.ckpt.checkpoint_path, f"global_opt_step{int(global_opt_step)}")
+            ckpt_path = os.path.join(config.ckpt.checkpoint_path, f"global_opt_step_{int(global_opt_step)}")
 
             save_checkpoint(
                 checkpoint_path=ckpt_path,
@@ -432,5 +435,11 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
             torch.save(global_model.state_dict(), "mycelia_final.pt")
 
 if __name__ == "__main__":
-    config = ValidatorConfig()
+    args = parse_args()
+
+    if args.path:
+        config = ValidatorConfig.from_json(args.path)
+    else:
+        config = Validator()
+
     run(0, 1, config)

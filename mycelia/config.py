@@ -29,7 +29,6 @@ def find_project_root() -> Path:
 # ---------------------------
 # Enums
 # ---------------------------
-
 class Precision(str, Enum):
     fp32 = "fp32"
     bf16 = "bf16"
@@ -43,10 +42,14 @@ class AttnImpl(str, Enum):
 # ---------------------------
 # Sections
 # ---------------------------
+class ChainCfg(BaseModel):
+    uid: int = 1
+    hotkey: str = "hk1"
+    ip: str = "0.0.0.0"
+    port: int = 8000
 
 class RunCfg(BaseModel):
     run_name: str = "foundation"
-    miner_uid: int = 1
     root_path: Path = find_project_root() 
 
 class ModelCfg(BaseModel):
@@ -66,7 +69,6 @@ class DataCfg(BaseModel):
     world_size: int = 10 #TODO
     rank: int = 1 #TODO
 
-
 class MoECfg(BaseModel):
     my_expert_group_id: int = 1
     dense_to_moe: bool = True
@@ -83,7 +85,6 @@ class MoECfg(BaseModel):
     num_worker_groups: PositiveInt = 2
     rotate_expert: bool = False
     expert_rotate_interval: Optional[PositiveInt] = None
-
 
 class OptimizerCfg(BaseModel):
     lr: float = 2e-5
@@ -115,7 +116,7 @@ class CheckpointCfg(BaseModel):
     checkpoint_path: Optional[Path] = None
     checkpoint_interval: Optional[PositiveInt] = None
     full_validation_interval: Optional[PositiveInt] = None
-    checkpoint_topk: PositiveInt = 20
+    checkpoint_topk: PositiveInt = 5
 
 class LoggingCfg(BaseModel):
     log_wandb: bool = False
@@ -141,6 +142,7 @@ class BaseConfig(BaseModel):
     Centralized training/eval configuration for mycelia runs.
     """
     run: RunCfg = RunCfg()
+    chain: ChainCfg = ChainCfg()
     model: ModelCfg = ModelCfg()
     moe: MoECfg = MoECfg()
     ckpt: CheckpointCfg = CheckpointCfg()
@@ -232,15 +234,14 @@ class BaseConfig(BaseModel):
         return cls(**data)
     
     def _refresh_paths(self) -> None:
-        self.ckpt.base_checkpoint_path = self.run.root_path / self.ckpt.base_checkpoint_path
-        self.ckpt.checkpoint_path = self.ckpt.base_checkpoint_path / self.run.run_name
+        self.ckpt.base_checkpoint_path = self.run.root_path / self.ckpt.base_checkpoint_path 
+        self.ckpt.checkpoint_path = self.ckpt.base_checkpoint_path / self.chain.hotkey / self.run.run_name
         
         self.log.base_metric_path = self.run.root_path / self.log.base_metric_path
         self.log.metric_path = self.log.base_metric_path / f"{self.run.run_name}.csv"
 
         if hasattr(self, "vali"):
             self.vali.miner_submission_path = self.run.root_path / self.vali.miner_submission_path
-
 
     @staticmethod
     def _bump_run_name(name: str) -> str:

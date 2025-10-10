@@ -4,6 +4,7 @@ import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+import uvicorn
 
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -14,6 +15,7 @@ from mycelia.shared.checkpoint import (
     load_checkpoint,
 )
 
+from mycelia.config import MinerConfig, parse_args
 from mycelia.shared.app_logging import structlog, configure_logging
 from mycelia.shared.app_logging import configure_logging, structlog
 
@@ -118,3 +120,13 @@ async def index(request: Request):
             "auth": "Set AUTH_TOKEN env var to require 'Authorization: Bearer <token>'",
         }
     )
+
+if __name__ == "__main__":
+    args = parse_args()
+
+    if args.path:
+        config = MinerConfig.from_json(args.path)
+    else:
+        config = MinerConfig()
+
+    uvicorn.run(app, host=config.chain.ip, port=config.chain.port)  

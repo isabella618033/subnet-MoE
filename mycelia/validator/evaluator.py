@@ -104,12 +104,10 @@ async def download_worker(
         finally:
             miners_q.task_done()
 
-# TODO: replace with model merging instead of loading
 def load_model_from_path(path: str, base_model) -> nn.Module:
-    sd = torch.load(path, map_location=torch.device("cpu"))
+    sd = torch.load(path, map_location=torch.device("cpu"))['model_state_dict']
     base_model.load_state_dict(sd, strict = False)
-    return base_model
-    
+    return base_model 
 
 async def evaluator_worker(
     name: str,
@@ -141,6 +139,9 @@ async def evaluator_worker(
             score = float(metrics.get("val_loss", 100))
             aggregator.add_score(job.uid, job.hotkey, score)
             logger.info(f"{name}: uid={job.uid} hotkey={job.hotkey} score={score:.4f} path={job.model_path}")
+            
+            del eval_dataloader
+        
         except Exception as e:
             logger.exception(f"{name}: Evaluation failed for uid={job.uid}: {e}")
         finally:
