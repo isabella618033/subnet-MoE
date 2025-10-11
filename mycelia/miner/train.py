@@ -46,7 +46,7 @@ from mycelia.shared.helper import *
 configure_logging()
 logger = structlog.get_logger(__name__)
 
-
+# this is for local DP only 
 def init_process(local_rank: int, config: MinerConfig, world_size: int, fn: callable, backend: str = "nccl") -> None:
     """
     Initializes the process for distributed training.
@@ -216,11 +216,6 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
     if rank == 0:
         config.write()
 
-    # === create checkpoint directory ===
-    os.makedirs(config.ckpt.base_checkpoint_path, exist_ok=True)
-    os.makedirs(config.ckpt.checkpoint_path, exist_ok=True)
-    os.makedirs(config.log.base_metric_path, exist_ok=True)
-
     # === set logging ===
     logger.info(config)
     metric_logger = MetricLogger(config, rank)
@@ -314,6 +309,13 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 # === inner optimizer ===
                 if is_inner_optimizer_step:
                     logp("inner opt step", loss_batch, aux_loss_batch)
+
+                    for p in model.parameters():
+                        if p.grad is None:
+                            continue
+                        dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+                        p.grad.div_(world_size)
+
                     inner_scaler.unscale_(optimizer=inner_optimizer)
 
                     clip_grad_norm_(model.parameters(), 1.0)  # gradient clipping
@@ -345,50 +347,6 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     aux_loss_batch=aux_loss_batch,
                 )
                 metric_logger.log(metrics, print_log=False)
-
-            # === global optimizer ===
-            if not is_start_step and is_inner_optimizer_step and inner_opt_step % config.local_par.global_opt_interval == 0 :
-                # --- pre-opt: barrier reached + eval ---
-                logp(f"reached global opt barrier", loss_batch, aux_loss_batch)
-
-                # --- sync + outer step ---
-                # keep global model on device for syncing/stepping, then move back to CPU
-                global_model.to(device)
-
-                old_shared_name, old_shared_sum = get_weight_sum(model, shared=True)
-                old_expert_name, old_expert_sum = get_weight_sum(model, shared=False)
-
-                dist.barrier(device_ids=[rank])
-                logp("start syncing shared weights")
-                sync_weights(rank, global_model, model, shared_only = False)
-
-                outer_optimizer.step()
-                outer_optimizer.zero_grad()
-
-                # copy updated global weights back into the worker model safely
-                with torch.no_grad():
-                    model.load_state_dict(global_model.state_dict(), strict=True)
-
-                new_shared_name, new_shared_sum = get_weight_sum(model, shared=True)
-                new_expert_name, new_expert_sum = get_weight_sum(model, shared=False)
-
-                logp(
-                    f"outer optimizer step (shared) {old_shared_name}, {old_shared_sum:.8f} "
-                    f"-> {new_shared_name}, {new_shared_sum:.8f}"
-                )
-                dist.barrier(device_ids=[rank])
-                logp(
-                    f"outer optimizer step (expert) {old_expert_name}, {old_expert_sum:.8f} "
-                    f"-> {new_expert_name}, {new_expert_sum:.8f}"
-                )
-
-                global_model.to("cpu")
-                del old_shared_name, old_shared_sum
-                del old_expert_name, old_expert_sum
-                del new_shared_name, new_shared_sum
-                del new_expert_name, new_expert_sum
-                gc.collect()
-                torch.cuda.empty_cache()
 
             # === validation and log metric ===
             if is_inner_optimizer_step and inner_opt_step % config.log.metric_interval == 0:
@@ -509,7 +467,6 @@ def run_distributed_training() -> None:
         args=(config, config.local_par.world_size, train_worker),
         nprocs=config.local_par.world_size,
     )
-
 
 if __name__ == "__main__":
     run_distributed_training()

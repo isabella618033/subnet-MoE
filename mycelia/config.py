@@ -134,6 +134,11 @@ class ValidatorCheckpointCfg(CheckpointCfg):
 class ValidatorCfg(BaseModel):
     eval_interval: int = 100 # blocks
     miner_submission_path: Path = Path("checkpoints/validator/miner_submission")
+
+class MinerCfg(BaseModel):
+    eval_interval: int = 100 # blocks
+    validator_checkpoint_path: Path = Path("checkpoints/miner/validator_checkpoint")
+
 # ---------------------------
 # Top-level config
 # ---------------------------
@@ -212,6 +217,13 @@ class BaseConfig(BaseModel):
                 # bumped so need to check on the config at the new folder
                 config_path = os.path.join(self.ckpt.checkpoint_path, "config.json")
 
+        # === create checkpoint directory ===
+        os.makedirs(self.ckpt.base_checkpoint_path, exist_ok=True)
+        os.makedirs(self.ckpt.checkpoint_path, exist_ok=True)
+        os.makedirs(self.log.base_metric_path, exist_ok=True)
+        if hasattr(self, 'miner'):
+            os.makedirs(self.miner.validator_checkpoint_path, exist_ok=True)
+
     @classmethod
     def from_json(cls, path: str) -> "Config":
         """
@@ -242,6 +254,9 @@ class BaseConfig(BaseModel):
 
         if hasattr(self, "vali"):
             self.vali.miner_submission_path = self.run.root_path / self.vali.miner_submission_path
+        
+        if hasattr(self, "miner"):
+            self.miner.validator_checkpoint_path = self.run.root_path / self.miner.validator_checkpoint_path
 
     @staticmethod
     def _bump_run_name(name: str) -> str:
@@ -352,6 +367,7 @@ def parse_args():
 
 
 class MinerConfig(BaseConfig):
+    miner: MinerCfg = MinerCfg()
     local_par: ParallelismCfg = ParallelismCfg()
 
 class ValidatorConfig(BaseConfig):

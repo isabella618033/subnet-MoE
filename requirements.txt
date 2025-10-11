@@ -67,3 +67,5 @@ torchdata
 wandb
 fastapi
 uvicorn
+aiofiles
+python-multipart

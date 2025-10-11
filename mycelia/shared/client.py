@@ -4,7 +4,15 @@ import argparse
 import os
 import sys
 import requests
+import hashlib
 from time import time
+import hashlib
+import os
+from typing import Any, Dict, Optional
+import requests
+from requests import Response
+from requests.exceptions import RequestException, Timeout, ConnectionError as ReqConnectionError
+
 
 CHUNK = 1024 * 1024  # 1 MiB
 
@@ -14,6 +22,120 @@ def human(n):
             return f"{n:.2f} {unit}"
         n /= 1024
     return f"{n:.2f} PiB"
+
+_CHUNK = 1024 * 1024  # 1 MiB
+
+
+def _sha256_file(path: str, chunk_size: int = _CHUNK) -> str:
+    """Stream the file to compute SHA256 without loading into RAM."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def submit_model(
+    url: str,
+    token: str,
+    model_path: str,
+    uid: int, 
+    hotkey: str,
+    step: int = 12000,
+    timeout_s: int = 300,
+    retries: int = 3,
+    backoff: float = 1.8,
+    extra_form: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Upload a model checkpoint with retries and robust error handling.
+
+    Returns parsed JSON on success. Raises RuntimeError with context on failure.
+    """
+    # --- preflight checks ---
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        raise ValueError("url must start with http:// or https://")
+
+    if not os.path.isfile(model_path):
+        raise FileNotFoundError(f"File not found: {model_path}")
+
+    if os.path.getsize(model_path) == 0:
+        raise ValueError(f"File is empty: {model_path}")
+
+    try:
+        checksum = _sha256_file(model_path)
+    except PermissionError as e:
+        raise PermissionError(f"Cannot read file (permission denied): {model_path}") from e
+    except OSError as e:
+        raise OSError(f"Failed to read file: {model_path}") from e
+
+    data = {"step": str(step), "checksum_sha256": checksum, "uid": uid, "hotkey": hotkey}
+    if extra_form:
+        # stringify non-bytes for safety in form data
+        for k, v in extra_form.items():
+            data[k] = v if isinstance(v, (str, bytes)) else str(v)
+
+    # --- retry loop for transient failures ---
+    attempt = 0
+    last_exc: Optional[Exception] = None
+
+    while attempt <= retries:
+        try:
+            with open(model_path, "rb") as fh:
+                files = {"file": (os.path.basename(model_path), fh)}
+                resp: Response = requests.post(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    files=files,
+                    data=data,
+                    timeout=timeout_s,
+                )
+
+            # Raise on non-2xx
+            try:
+                resp.raise_for_status()
+            except requests.HTTPError as http_err:
+                # Try to extract JSON error payload for context
+                err_body = None
+                try:
+                    err_body = resp.json()
+                except ValueError:
+                    err_body = resp.text[:1000]  # truncate long HTML
+                # Some 4xx are not retryable (auth, validation)
+                non_retryable = {400, 401, 403, 404, 405, 409, 422}
+                detail = f"HTTP {resp.status_code}: {err_body}"
+                if resp.status_code in non_retryable or attempt == retries:
+                    raise RuntimeError(f"Upload failed: {detail}") from http_err
+                else:
+                    last_exc = RuntimeError(detail)
+                    # fall through to retry
+                    raise
+
+            # Parse success JSON (server should return metadata)
+            try:
+                return resp.json()
+            except ValueError:
+                # Not JSON; return minimal info
+                return {"status": "ok", "http_status": resp.status_code, "text": resp.text}
+
+        except (Timeout, ReqConnectionError) as net_err:
+            # Retry timeouts / connection errors unless we exhausted attempts
+            last_exc = net_err
+        except RequestException as req_err:
+            # Generic requests error: retry unless final attempt
+            last_exc = req_err
+        except Exception as e:
+            # File I/O during open/read already handled above; treat others as fatal
+            raise RuntimeError(f"Unexpected error during upload: {e}") from e
+
+        # If we got here, we plan to retry
+        attempt += 1
+        if attempt <= retries:
+            sleep_s = backoff ** attempt
+            time.sleep(sleep_s)
+
+    # Exhausted retries
+    raise RuntimeError(f"Upload failed after {retries + 1} attempts: {last_exc}")
 
 def download_model(url: str, token: str, out: str, resume: bool = False, timeout: int = 30):
     headers = {"Authorization": f"Bearer {token}"} if token else {}

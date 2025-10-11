@@ -2,14 +2,14 @@ import os
 import torch
 import fsspec
 from copy import deepcopy
-from mycelia.config import MinerConfig
+from mycelia.config import MinerConfig, ValidatorConfig
 from fsspec.generic import GenericFileSystem
 from torchdata.stateful_dataloader import StatefulDataLoader
 from mycelia.shared.app_logging import structlog
 
 logger = structlog.getLogger(__name__)
 
-def get_resume_info(rank: int, config: MinerConfig) -> tuple[bool, int, str | None]:
+def get_resume_info(rank: int, config: MinerConfig | ValidatorConfig) -> tuple[bool, int, str | None]:
     """
     Retrieves the resume information for a given rank and checkpoint configuration.
 
