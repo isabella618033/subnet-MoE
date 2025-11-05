@@ -31,14 +31,19 @@ Both read the same `config.json`.
 ---
 
 ## Paths & Layout
+All the miner/validator configuration are controlled via a config.json file. 
 
-Your `--path` points to the validator’s **config file**:
+You may create a template config file by running 
+```python mycelia/shared/config.py --get_template <validator/miner> --coldkey_name <your coldkey name> --hotkey_name <your hotkey name> --run_name <your naming to specify this run>```
+
+Then, you may modify any specifics in the config.json file if needed.
+
+Afterwards, when you are running the validator, simply use `--path` to point to the validator’s **config file**:
 
 ```
 ~/subnet-MoE/checkpoints/validator/<your hotkey>/<run name>/config.json
 ```
 > when a path is not provided, it would use the default config from .../mycelia/config.py
-> Use a separate root per hotkey/validator identity, e.g. `hotkey_3/`.
 
 ---
 

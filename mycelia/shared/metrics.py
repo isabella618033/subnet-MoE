@@ -25,7 +25,7 @@ import pandas as pd
 import torch
 import wandb
 
-from mycelia.config import MinerConfig
+from mycelia.shared.config import MinerConfig
 
 logger = logging.getLogger("diloco.metrics")
 

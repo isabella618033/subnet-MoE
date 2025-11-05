@@ -19,7 +19,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 from transformers import get_cosine_schedule_with_warmup, PreTrainedTokenizerBase
 
-from mycelia.config import MinerConfig, parse_args
+from mycelia.shared.config import MinerConfig, parse_args
 from mycelia.shared.app_logging import structlog, configure_logging
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import load_base_model 
@@ -458,7 +458,7 @@ def run_distributed_training() -> None:
     args = parse_args()
 
     if args.path:
-        config = MinerConfig.from_json(args.path)
+        config = MinerConfig.from_path(args.path)
     else:
         config = MinerConfig()
 

@@ -13,13 +13,13 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Header, Request, File, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from mycelia.config import MinerConfig, ValidatorConfig
+from mycelia.shared.config import MinerConfig, ValidatorConfig
 from mycelia.shared.checkpoint import (
     get_resume_info,
     load_checkpoint,
 )
 
-from mycelia.config import MinerConfig, parse_args
+from mycelia.shared.config import MinerConfig, parse_args
 from mycelia.shared.app_logging import structlog, configure_logging
 
 
@@ -89,11 +89,11 @@ async def _startup():
     structlog.get_logger(__name__).info("startup_ok")
 
 # ---- Routes ----
-
 @app.get("/")
 async def index(request: Request):
     return JSONResponse(
         {
+            "name": config.chain.hotkey_ss58,
             "service": "Checkpoint Sender",
             "version": "0.0.0",
             "endpoints": {
@@ -237,7 +237,7 @@ if __name__ == "__main__":
     global config
     
     if args.path:
-        config = ValidatorConfig.from_json(args.path)
+        config = ValidatorConfig.from_path(args.path)
     else:
         config = ValidatorConfig()
 

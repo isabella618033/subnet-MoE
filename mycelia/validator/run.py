@@ -7,6 +7,7 @@ import json
 import fsspec
 import copy
 import datetime
+import secrets
 from functools import partial
 import copy
 from typing import Tuple, Union, Optional, Dict, Any, List
@@ -22,10 +23,12 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 from transformers import get_cosine_schedule_with_warmup, PreTrainedTokenizerBase
 
+import bittensor
 from hivemind.averaging import DecentralizedAverager 
 
 from mycelia.mock.validator.run import add_grad_noise
-from mycelia.config import MinerConfig, ValidatorConfig, parse_args
+from mycelia.shared.chain import commit_status, ValidatorStatus
+from mycelia.shared.config import MinerConfig, ValidatorConfig, parse_args
 from mycelia.shared.app_logging import structlog, configure_logging
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import load_base_model 
@@ -49,6 +52,7 @@ from mycelia.shared.expert_manager import (
     populate_global_grads_from_local,
 )
 from mycelia.shared.helper import *
+from mycelia.shared.chain import serve_axon
 from mycelia.validator.aggregator import MinerScoreAggregator
 from mycelia.validator.inter_validator_connection import connect_with_peers, build_averagers_from_buff, build_grad_buff_from_model, pack_grads, unpack_to_grads
 from mycelia.validator.evaluator import run_evaluation, gather_miner_info, MinerEvalJob, load_model_from_path
@@ -66,6 +70,18 @@ def cleanup() -> None:
     """
     torch.cuda.synchronize()
 
+def setup_chain_worker(
+    config
+):
+    wallet = bittensor.wallet(name = config.chain.coldkey_name, hotkey = config.chain.hotkey_name)
+    subtensor = bittensor.subtensor(network = config.chain.network) 
+    serve_axon(
+        config = config,
+        wallet = wallet,
+        subtensor = subtensor,
+    )
+
+    return wallet, subtensor
 
 def setup_training(
     config, rank: int, device: torch.device, tokenizer: PreTrainedTokenizerBase
@@ -167,7 +183,6 @@ def sync_grad_across_validators(
         
         logger.info(group_id, "->", ("averaged" if info else "no group"))
     
-
 def run_global_optimization(
         model: nn.Module,
         global_model: nn.Module,
@@ -213,7 +228,6 @@ def run_global_optimization(
     del new_expert_name, new_expert_sum
     gc.collect()
     torch.cuda.empty_cache()
-
 
 def run(rank: int, world_size: int, config: MinerConfig) -> None:
     """
@@ -276,6 +290,9 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
         dht = dht
     )
 
+    # === set up chain worker ===
+    wallet, subtensor = setup_chain_worker(config)
+
     # === training ===
     loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
     aux_loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
@@ -306,8 +323,9 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
 
                 logger.info(f"rank {rank} | gloabl_opt {global_opt_step} | {msg}")
 
-            # # === Get miner ===
-            # miner_jobs = gather_miner_info()
+            # === Get miner ===
+            miner_jobs = gather_miner_info()
+            logger.info(global_opt_step = global_opt_step, miner_jobs = miner_jobs)
 
             # # === Download miner model and evaluate the miners ===
             # asyncio.run(run_evaluation(
@@ -335,50 +353,48 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
             #     score_aggregator = score_aggregator
             # ))
 
-            add_grad_noise(global_model, 20)
+            # # === aggragate miner gradient change ===
+            # logp(f"sync gradient across validators", loss_batch, aux_loss_batch)
+            # sync_grad_across_validators(
+            #     group_averagers,
+            #     group_grad_buff_meta
+            # )
 
-            # === aggragate miner gradient change ===
-            logp(f"sync gradient across validators", loss_batch, aux_loss_batch)
-            sync_grad_across_validators(
-                group_averagers,
-                group_grad_buff_meta
-            )
+            # # === global optimizer ===
+            # run_global_optimization(
+            #     model = model,
+            #     global_model = global_model,
+            #     device = device,
+            #     rank = rank,
+            #     logp = logp,
+            #     outer_optimizer = outer_optimizer,
+            #     miner_jobs = miner_jobs,
+            #     score_aggregator = score_aggregator
+            # )
 
-            # === global optimizer ===
-            run_global_optimization(
-                model = model,
-                global_model = global_model,
-                device = device,
-                rank = rank,
-                logp = logp,
-                outer_optimizer = outer_optimizer,
-                miner_jobs = miner_jobs,
-                score_aggregator = score_aggregator
-            )
+            # # === validation and log metric ===
+            # logp(f"start local evaluation")
+            # val_metric = evaluate_model(
+            #     rank=rank, step=global_opt_step, model=model, eval_dataloader=eval_dataloader, device=device
+            # )
 
-            # === validation and log metric ===
-            logp(f"start partial evaluation")
-            val_metric = evaluate_model(
-                rank=rank, step=global_opt_step, model=model, eval_dataloader=eval_dataloader, device=device
-            )
+            # logp(f"evaluation before log {val_metric}")
+            # metrics = (
+            #     get_status(
+            #         config = config,
+            #         model = model,
+            #         step = global_opt_step,
+            #         training_time = training_time,
+            #         total_training_time = total_training_time,
+            #         inner_opt_step = None,
+            #         global_opt_step = global_opt_step,
+            #         loss_batch=loss_batch,
+            #         aux_loss_batch=aux_loss_batch,
+            #     )
+            #     | val_metric
+            # )
 
-            logp(f"evaluation before log {val_metric}")
-            metrics = (
-                get_status(
-                    config = config,
-                    model = model,
-                    step = global_opt_step,
-                    training_time = training_time,
-                    total_training_time = total_training_time,
-                    inner_opt_step = None,
-                    global_opt_step = global_opt_step,
-                    loss_batch=loss_batch,
-                    aux_loss_batch=aux_loss_batch,
-                )
-                | val_metric
-            )
-
-            metric_logger.log(metrics)
+            # metric_logger.log(metrics)
 
             # === save checkpoint ===
             logp(f"saving checkpoint")
@@ -395,18 +411,27 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
                 rank=rank,
             )
 
+            # === Comit to chain for new model ===
+            commit_status(config, wallet, subtensor, ValidatorStatus(
+                model_hash = 'xxx',
+                model_version = global_opt_step,
+                next_validation_start = subtensor.block + 100,
+                miner_seed = secrets.randbits(24) # this should reveal later
+            ))
+
             if rank == 0:
                 if config.ckpt.checkpoint_topk is not None:
                     ckpt_deleted = delete_old_checkpoints(config.ckpt.checkpoint_path, config.ckpt.checkpoint_topk)
                     if ckpt_deleted:
                         logp(f"Deleted old checkpoints: {ckpt_deleted}")
             
-            # === Clean up ===
-            loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
-            aux_loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
-            gc.collect()
-            torch.cuda.empty_cache()
+            # # === Clean up ===
+            # loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
+            # aux_loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
+            # gc.collect()
+            # torch.cuda.empty_cache()%
 
+            time.sleep(60)
             global_opt_step += 1
 
     except Exception as E:
@@ -423,8 +448,8 @@ if __name__ == "__main__":
     args = parse_args()
 
     if args.path:
-        config = ValidatorConfig.from_json(args.path)
+        config = ValidatorConfig.from_path(args.path)
     else:
-        config = Validator()
+        config = ValidatorConfig()
 
     run(0, 1, config)

@@ -53,7 +53,7 @@ from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3
 from transformers.utils.deprecation import deprecate_kwarg
 from transformers.modeling_outputs import MoeCausalLMOutputWithPast
 
-from mycelia.config import MinerConfig
+from mycelia.shared.config import MinerConfig
 from mycelia.shared.app_logging import structlog  
 from mycelia.shared.modeling.modeling_deepseek import DeepseekAttention  
 from mycelia.shared.helper import *  

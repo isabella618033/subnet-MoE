@@ -11,6 +11,7 @@ import os
 from typing import Any, Dict, Optional
 import requests
 from requests import Response
+from pathlib import Path
 from requests.exceptions import RequestException, Timeout, ConnectionError as ReqConnectionError
 
 
@@ -137,7 +138,7 @@ def submit_model(
     # Exhausted retries
     raise RuntimeError(f"Upload failed after {retries + 1} attempts: {last_exc}")
 
-def download_model(url: str, token: str, out: str, resume: bool = False, timeout: int = 30):
+def download_model(url: str, token: str, out: str | Path, resume: bool = False, timeout: int = 30):
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     mode = "wb"
     start_at = 0

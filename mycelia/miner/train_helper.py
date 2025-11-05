@@ -19,7 +19,7 @@ from transformers import (
     get_cosine_schedule_with_warmup,
 )
 
-from mycelia.config import MinerConfig
+from mycelia.shared.config import MinerConfig
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import get_base_model, partial_moe
 from mycelia.shared.modeling.modeling_mycelia import get_base_tokenizer

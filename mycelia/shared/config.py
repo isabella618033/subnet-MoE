@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import math
 import os
 import re
@@ -13,9 +12,11 @@ from typing import Dict, List, Literal, Optional
 import fsspec
 import torch
 from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt, field_validator, model_validator
+import bittensor
 
-from mycelia.shared.app_logging import structlog  
+from mycelia.shared.app_logging import structlog, configure_logging
 
+configure_logging()
 logger = structlog.get_logger(__name__)
 
 def find_project_root() -> Path:
@@ -43,10 +44,16 @@ class AttnImpl(str, Enum):
 # Sections
 # ---------------------------
 class ChainCfg(BaseModel):
+    netuid: int = 348
     uid: int = 1
-    hotkey: str = "hk1"
+    hotkey_ss58: str = ""
+    coldkey_ss58: str = ""
     ip: str = "0.0.0.0"
     port: int = 8000
+    role: str = 'miner' # ['miner', 'validator']
+    coldkey_name: str = 'template_coldkey_name'
+    hotkey_name: str = 'template_hotkey_name'
+    network: str = 'test'
 
 class RunCfg(BaseModel):
     run_name: str = "foundation"
@@ -105,6 +112,7 @@ class ParallelismCfg(BaseModel):# parallelism for local training
             return int(torch.cuda.device_count())
         except Exception:
             return 0
+        
 class ScheduleCfg(BaseModel):
     warmup_steps: PositiveInt = 600
     total_steps: PositiveInt = 88_000
@@ -200,6 +208,7 @@ class BaseConfig(BaseModel):
         config exists and differs.
         """
         super().__init__(**data)
+        self._fill_wallet_data()
         # Recompute dependent fields that rely on CUDA availability or run_name. 
         self._refresh_paths()
 
@@ -225,7 +234,7 @@ class BaseConfig(BaseModel):
             os.makedirs(self.miner.validator_checkpoint_path, exist_ok=True)
 
     @classmethod
-    def from_json(cls, path: str) -> "Config":
+    def from_path(cls, path: str) -> "Config":
         """
         Load a MinerConfig from a JSON file.
 
@@ -247,7 +256,7 @@ class BaseConfig(BaseModel):
     
     def _refresh_paths(self) -> None:
         self.ckpt.base_checkpoint_path = self.run.root_path / self.ckpt.base_checkpoint_path 
-        self.ckpt.checkpoint_path = self.ckpt.base_checkpoint_path / self.chain.hotkey / self.run.run_name
+        self.ckpt.checkpoint_path = self.ckpt.base_checkpoint_path / self.chain.coldkey_name / self.chain.hotkey_name / self.run.run_name
         
         self.log.base_metric_path = self.run.root_path / self.log.base_metric_path
         self.log.metric_path = self.log.base_metric_path / f"{self.run.run_name}.csv"
@@ -257,6 +266,16 @@ class BaseConfig(BaseModel):
         
         if hasattr(self, "miner"):
             self.miner.validator_checkpoint_path = self.run.root_path / self.miner.validator_checkpoint_path
+
+    def _fill_wallet_data(self):
+        wallet = bittensor.wallet(name = self.chain.coldkey_name, hotkey = self.chain.hotkey_name)
+        try:
+            self.chain.hotkey_ss58 = wallet.hotkey.ss58_address
+            self.chain.coldkey_ss58 = wallet.coldkeypub.ss58_address
+        except bittensor.KeyFileError as e:
+            logger.warning(f"Cannot find the wallet key by name coldkey name: {self.chain.coldkey_name}, hotkey name: {self.chain.hotkey_name}, please make sure it has been set correctly if you are reloading from a config.json or use --hotkey_name & --coldkey_name when you are creating a config file from a template.", error=str(e))
+            return 
+        
 
     @staticmethod
     def _bump_run_name(name: str) -> str:
@@ -363,8 +382,27 @@ def parse_args():
         type=str,
         help="Path to JSON config file",
     )
+    parser.add_argument(
+        "--get_template",
+        choices=["miner", "validator"],
+        help="Get a template config for miner or validator",
+    )
+    parser.add_argument(
+        "--hotkey_name",
+        type=str,
+        help="Optional, wallet hotkey name for creating the folder path to the template file.",
+    )
+    parser.add_argument(
+        "--coldkey_name",
+        type=str,
+        help="Optional, wallet coldkey name for creating the folder path to the template file.",
+    )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        help="Optional, run name for creating the folder path to the template file.",
+    )
     return parser.parse_args()
-
 
 class MinerConfig(BaseConfig):
     miner: MinerCfg = MinerCfg()
@@ -374,3 +412,25 @@ class ValidatorConfig(BaseConfig):
     vali: ValidatorCfg = ValidatorCfg()
     ckpt: ValidatorCheckpointCfg = ValidatorCheckpointCfg()
     
+if __name__ == "__main__":
+    args = parse_args()
+
+    if args.get_template:
+
+        config_dict = {}
+        if args.run_name:
+            config_dict['run'] = {'run_name': args.run_name}
+
+        if args.hotkey_name:
+            config_dict['chain'] = {'hotkey_name': args.hotkey_name}
+        
+        if args.coldkey_name:
+            if 'chain' not in config_dict:
+                config_dict['chain'] = {}
+            config_dict['chain']['coldkey_name'] = args.coldkey_name
+
+        if args.get_template == 'validator':
+            ValidatorConfig(**config_dict).write()
+        
+        if args.get_template == 'miner':
+            MinerConfig(**config_dict).write() 

@@ -10,11 +10,11 @@ import requests
 import torch
 from torch import nn
 
-from mycelia.config import MinerConfig
+from mycelia.shared.config import MinerConfig
 from mycelia.shared.app_logging import structlog  
 from mycelia.shared.expert_manager import ExpertManager, create_expert_groups 
 from mycelia.shared.modeling.modeling_mycelia import get_base_model  , partial_moe
-from mycelia.shared import blockchain
+from mycelia.shared import chain
 from mycelia.shared.checkpoint import (
     get_resume_info,
     load_checkpoint,
@@ -60,7 +60,7 @@ def _fetch_validator_endpoint_from_chain(round_hint: Optional[str] = None) -> Op
     You implement this inside shared/blockchain.py
     """
     try:
-        info = blockchain.get_active_validator_info(round_hint)  # must return {"api_base": "...", ...}
+        info = chain.get_active_validator_info()  # must return {"api_base": "...", ...}
         endpoint = (info or {}).get("api_base")
         return endpoint
     except Exception as e:

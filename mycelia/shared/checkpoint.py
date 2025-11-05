@@ -2,7 +2,7 @@ import os
 import torch
 import fsspec
 from copy import deepcopy
-from mycelia.config import MinerConfig, ValidatorConfig
+from mycelia.shared.config import MinerConfig, ValidatorConfig
 from fsspec.generic import GenericFileSystem
 from torchdata.stateful_dataloader import StatefulDataLoader
 from mycelia.shared.app_logging import structlog
