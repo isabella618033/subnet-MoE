@@ -1,4 +1,4 @@
-# checkpoint_manager.py
+
 import os
 import sys
 import time
@@ -16,137 +16,14 @@ from requests.exceptions import RequestException, Timeout, ConnectionError as Re
 
 import bittensor 
 from mycelia.shared.chain import serve_axon, get_status, commit_status, MinerStatus
-from mycelia.shared.evaluate import get_validator_miner_assignment
 from mycelia.shared.checkpoint import get_resume_info, delete_old_checkpoints
 from mycelia.shared.config import MinerConfig, parse_args           
 from mycelia.miner.client import submit_model, download_model           
 from mycelia.shared.app_logging import structlog, configure_logging
+from mycelia.shared.cycle import setup_chain_worker, scan_for_new_model, should_submit_model, search_model_submission_destination, get_validator_miner_assignment
 
 configure_logging()
 logger = structlog.get_logger(__name__)
-
-
-def should_submit(
-    config: MinerConfig,
-    subtensor: bittensor.Subtensor,
-    last_submission_block: int,
-):    
-    submission_start_block = (subtensor.block // config.cycle.validation_block + 1) * config.cycle.validation_block - config.cycle.submission_offset
-    logger.info(submission_start_block = submission_start_block, current_block = subtensor.block, last_submission_block = last_submission_block)
-
-    return (subtensor.block > submission_start_block) and (subtensor.block - last_submission_block > config.cycle.validation_block - config.cycle.submission_offset) 
-    
-def search_submission_destination(
-    wallet: bittensor.wallet,
-    config: MinerConfig, 
-    subtensor: bittensor.Subtensor
-) -> bittensor.Axon:
-    
-    validator_miner_assignment = get_validator_miner_assignment(config, subtensor)
-    
-    for validator, miners in validator_miner_assignment.items():
-        if wallet.hotkey.ss58_address in miners:
-            assigned_validator_hotkey = validator
-            break
-
-    metagraph = subtensor.metagraph(netuid = config.chain.netuid)
-    uid = metagraph.hotkeys.index(assigned_validator_hotkey)
-    return metagraph.axons[uid]
-
-def scan_for_new_model(
-    current_model_version: int,
-    current_model_hash: str,
-    config: MinerConfig,
-    subtensor: bittensor.subtensor,
-) -> Tuple[bool, List[dict]]:
-    """
-    Returns:
-        should_download: True if a newer model (by version) is available and a majority
-                         agree on the model_hash among those newer entries.
-        download_meta:   list of dicts with fields: uid, ip, port, model_hash, model_version
-                         filtered to entries that (a) are newer and (b) match the majority hash.
-    """
-    status_map = get_status(config, subtensor)
-
-    # ---- helpers ------------------------------------------------------------
-    def extract_entry_fields(entry: Any):
-        """Normalize entry into (status_obj, neuron_obj)."""
-        if isinstance(entry, dict) and ("status" in entry or "neuron" in entry):
-            return entry.get("status", None), entry.get("neuron", None)
-        # Otherwise assume the value itself is a status object (older code paths)
-        return entry, None
-
-    def get_version_and_hash(status_obj) -> Tuple[Optional[int], Optional[str]]:
-        mv = getattr(status_obj, "model_version", None)
-        mh = getattr(status_obj, "model_hash", None)
-        return mv, mh
-
-    def get_uid(neuron_obj) -> Optional[int]:
-        return getattr(neuron_obj, "uid", None) if neuron_obj is not None else None
-
-    # ------------------------------------------------------------------------
-
-    # 1) collect candidates that are newer than the current version
-    newer_candidates = []  # (model_version, model_hash, uid, ip, port)
-    for _hotkey, entry in status_map.items():
-        status_obj, neuron_obj = extract_entry_fields(entry)
-        if status_obj is None:
-            continue
-        mv, mh = get_version_and_hash(status_obj)
-        if mv is None or mh is None:
-            continue
-        if mv > current_model_version:
-            uid = get_uid(neuron_obj)
-            ip = neuron_obj.axon_info.ip
-            port = neuron_obj.axon_info.port
-            newer_candidates.append((mv, mh, uid, ip, port))
-
-    if not newer_candidates:
-        return False, []
-
-    # 2) majority filter by model_hash among the newer candidates
-    hash_counts = Counter(mh for (_mv, mh, _uid, _ip, _port) in newer_candidates)
-    majority_hash, _count = hash_counts.most_common(1)[0]
-
-    filtered = [
-        (mv, mh, uid, ip, port)
-        for (mv, mh, uid, ip, port) in newer_candidates
-        if mh == majority_hash
-    ]
-    if not filtered:
-        return False, []
-
-    # 3) prepare download_meta for each entry (uid, ip, port, model_hash, model_version)
-    download_meta = []
-    for mv, mh, uid, ip, port in filtered:
-        # Only include entries with reachable metadata
-        download_meta.append(
-            {
-                "uid": uid,
-                "ip": ip,
-                "port": port,
-                "model_hash": mh,
-                "model_version": mv,
-            }
-        )
-
-    # should_download if there is at least one newer entry agreeing on a majority hash
-    should_download = len(download_meta) > 0
-
-    return should_download, download_meta
-
-
-def setup_chain_worker(
-    config
-):
-    wallet = bittensor.wallet(name = config.chain.coldkey_name, hotkey = config.chain.hotkey_name)
-    subtensor = bittensor.subtensor(network = config.chain.network) 
-    serve_axon(
-        config = config,
-        wallet = wallet,
-        subtensor = subtensor,
-    )
-    return wallet, subtensor
 
 def main(config):
 
@@ -228,26 +105,28 @@ def main(config):
             # --------- SUBMISSION PHASE ---------
             resume, start_step, latest_checkpoint_path = get_resume_info(rank=0, config=config)
 
-            if should_submit(config, subtensor, last_submission_block):
-                destination_axon = search_submission_destination(
-                    wallet = wallet,
-                    config = config,
-                    subtensor = subtensor
-                )
-                
-                submit_model(
-                    url=f"http://{destination_axon.ip}:{destination_axon.port}/submit-checkpoint",
-                    token="",
-                    step = 0,
-                    uid = config.chain.uid,
-                    hotkey = config.chain.hotkey_ss58,
-                    model_path=f"{latest_checkpoint_path}/model.pt",
-                )
+            start_submit = False
+            while not start_submit:
+                start_submit, block_till = should_submit_model(config, subtensor, last_submission_block) 
+                time.sleep(12)
 
-                last_submission_block = subtensor.block
+            destination_axon = search_model_submission_destination(
+                wallet = wallet,
+                config = config,
+                subtensor = subtensor
+            )
             
-            else:
-                logger.debug("Not time to submit yet (step=%s, last_step=%s)")
+            submit_model(
+                url=f"http://{destination_axon.ip}:{destination_axon.port}/submit-checkpoint",
+                token="",
+                step = 0,
+                uid = config.chain.uid,
+                hotkey = config.chain.hotkey_ss58,
+                model_path=f"{latest_checkpoint_path}/model.pt",
+            )
+
+            last_submission_block = subtensor.block
+        
 
         except (Timeout, ReqConnectionError) as e:
             logger.warning("Network issue: %s", e)
@@ -256,7 +135,7 @@ def main(config):
         except Exception as e:
             logger.exception("Unexpected error in loop: %s", e)
 
-        time.sleep(60 * 5)
+        time.sleep(60)
 
 
 

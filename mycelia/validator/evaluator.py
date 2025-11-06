@@ -36,8 +36,6 @@ import torch.nn as nn
 class MinerEvalJob:
     uid: str
     hotkey: str
-    url: str
-    token: str
     model_path: str
     step: int
 
@@ -48,17 +46,6 @@ EVAL_WORKERS = 2
 DOWNLOAD_TIMEOUT_SEC = 60
 EVAL_MAX_BATCHES = 50
 # ------------------------------------------------------------------------------
-
-def gather_miner_info() -> List[MinerEvalJob]:
-    """
-    MOCK: Replace with real miner discovery.
-    """
-    miners = [
-        MinerEvalJob(uid="uid_001", hotkey="hk_A", url="http://localhost:8000/checkpoint", token="tokA", step = 0, model_path = "/home/isabella/crucible/subnet-MoE/checkpoints/validator/miner_submission/uid1_hk1.pt"),
-        MinerEvalJob(uid="uid_002", hotkey="hk_B", url="http://localhost:8001/checkpoint", token="tokB", step = 0, model_path = "/home/isabella/crucible/subnet-MoE/checkpoints/validator/miner_submission/uid1_hk1.pt"),
-    ]
-    return miners
-
 
 def load_model_from_path(path: str, base_model) -> nn.Module:
     sd = torch.load(path, map_location=torch.device("cpu"))['model_state_dict']

@@ -56,9 +56,10 @@ class ChainCfg(BaseModel):
     network: str = 'test'
 
 class CycleCfg(BaseModel):
-    validation_block: int = 300 # validators run a validation round everytime when sub.block % validation_block == 0   
-    submission_offset: int = 50 # validators start accepting miner submission when sub.block > (sub.block // validation_block + 1) * validation_block - submission_offset
-
+    validation_period: int = 30 # validators run a validation round everytime when sub.block % validation_period == 0   
+    validation_offset: int = 15 # 3mins  # validation and model update happens from validation_period to validation_period + validation_offset  
+    submission_offset: int = 15 # 3mins # miner submission happens from validation_period - submission_offset to validation_period 
+    submission_rate_limit:int = 15
 class RunCfg(BaseModel):
     run_name: str = "foundation"
     root_path: Path = find_project_root() 

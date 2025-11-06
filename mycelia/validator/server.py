@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 import uvicorn
 
+import bittensor 
 from fastapi import FastAPI, HTTPException, Header, Request, File, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -172,7 +173,7 @@ async def submit_checkpoint(
         raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
 
     # Stream write + compute SHA256
-    model_name = f"uid{uid}_{hotkey}.pt"
+    model_name = f"uid_{uid}_hotkey_{hotkey}_block_{subtensor.block}.pt"
     hasher = hashlib.sha256()
     bytes_written = 0
     dest_path = config.vali.miner_submission_path / model_name
@@ -204,24 +205,6 @@ async def submit_checkpoint(
 
     logger.info(f"Stored checkpoint for step={step} at {dest_path} ({bytes_written} bytes) sha256={computed}")
 
-    # Optionally, write a small metadata file next to it
-    meta_path = config.vali.miner_submission_path / f"uid{uid}_{hotkey}_metadata.json"
-    try:
-        async with aiofiles.open(meta_path, "w") as meta:
-            await meta.write(
-                (
-                    '{'
-                    f'"step": {step}, '
-                    f'"filename": "{dest_path.name}", '
-                    f'"bytes": {bytes_written}, '
-                    f'"sha256": "{computed}"'
-                    '}'
-                )
-            )
-    except Exception:
-        # Non-fatal; metadata can be recreated
-        logger.warning("Failed to write metadata.json", exc_info=True)
-
     return {
         "status": "ok",
         "step": step,
@@ -235,10 +218,15 @@ if __name__ == "__main__":
     args = parse_args()
 
     global config
-    
+    global subtensor 
+
     if args.path:
         config = ValidatorConfig.from_path(args.path)
     else:
         config = ValidatorConfig()
+
+    config.write() 
+    
+    subtensor = bittensor.subtensor(network = config.chain.network) 
 
     uvicorn.run(app, host=config.chain.ip, port=config.chain.port)  

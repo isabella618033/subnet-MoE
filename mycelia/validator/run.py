@@ -55,7 +55,9 @@ from mycelia.shared.helper import *
 from mycelia.shared.chain import serve_axon
 from mycelia.validator.aggregator import MinerScoreAggregator
 from mycelia.validator.inter_validator_connection import connect_with_peers, build_averagers_from_buff, build_grad_buff_from_model, pack_grads, unpack_to_grads
-from mycelia.validator.evaluator import run_evaluation, gather_miner_info, MinerEvalJob, load_model_from_path
+from mycelia.validator.evaluator import run_evaluation, MinerEvalJob, load_model_from_path
+from mycelia.shared.cycle import gather_validation_job, should_start_validation
+
 
 configure_logging()
 logger = structlog.get_logger(__name__)
@@ -80,7 +82,6 @@ def setup_chain_worker(
         wallet = wallet,
         subtensor = subtensor,
     )
-
     return wallet, subtensor
 
 def setup_training(
@@ -229,7 +230,7 @@ def run_global_optimization(
     gc.collect()
     torch.cuda.empty_cache()
 
-def run(rank: int, world_size: int, config: MinerConfig) -> None:
+def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
     """
     The worker function for training in a distributed setting.
 
@@ -276,6 +277,8 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
         em,
         train_dataloader,
     ) = setup_training(config, rank, device, tokenizer)
+    
+    global_opt_step = start_step
 
     # === set up score aggregator ===
     score_aggregator = MinerScoreAggregator()
@@ -292,6 +295,13 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
 
     # === set up chain worker ===
     wallet, subtensor = setup_chain_worker(config)
+    
+    commit_status(config, wallet, subtensor, ValidatorStatus(
+        model_hash = 'xxx',
+        model_version = global_opt_step,
+        expert_group = 1,
+        miner_seed = secrets.randbits(24) # this should reveal later
+    ))
 
     # === training ===
     loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
@@ -302,7 +312,6 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
 
     outer_optimizer.zero_grad()
     
-    global_opt_step = start_step
     try:
         while True: 
             # for each step, we run 1 backward
@@ -324,8 +333,16 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
                 logger.info(f"rank {rank} | gloabl_opt {global_opt_step} | {msg}")
 
             # === Get miner ===
-            miner_jobs = gather_miner_info()
-            logger.info(global_opt_step = global_opt_step, miner_jobs = miner_jobs)
+            start_validation = False
+            while not start_validation:
+                start_validation, block_till = should_start_validation(config, subtensor) 
+                if block_till > 0:
+                    time.sleep((block_till) * 12)
+
+            miner_jobs = gather_validation_job(
+                config, subtensor, step = global_opt_step
+            )
+            logger.info('gathered miner job', global_opt_step = global_opt_step, miner_jobs = miner_jobs)
 
             # # === Download miner model and evaluate the miners ===
             # asyncio.run(run_evaluation(
@@ -431,7 +448,7 @@ def run(rank: int, world_size: int, config: MinerConfig) -> None:
             # gc.collect()
             # torch.cuda.empty_cache()%
 
-            time.sleep(60 * 5)
+            time.sleep(60)
 
             global_opt_step += 1
 
