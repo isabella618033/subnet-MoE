@@ -1,45 +1,29 @@
-
 from __future__ import annotations
 
-import os
-import re
-import copy
-import logging
-from typing import Dict, List, Optional, Tuple, Union
-from collections import OrderedDict
+from typing import List
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from huggingface_hub import login
-from transformers import (
-    AutoConfig,
-    AutoTokenizer,
-    LlamaConfig,
-    LlamaForCausalLM,
-    OlmoForCausalLM,
-    AutoModelForCausalLM,
-    PretrainedConfig,
+from transformers import AutoConfig, PretrainedConfig
+from transformers.models.qwen3_next.configuration_qwen3_next import (
+    Qwen3NextConfig,
 )
 from transformers.models.qwen3_next.modeling_qwen3_next import (
-    Qwen3NextSparseMoeBlock,
-    Qwen3NextDecoderLayer,
-    # Qwen3NextTopKRouter,
+    OutputRecorder,
     Qwen3NextAttention,
-    Qwen3NextPreTrainedModel,
-    Qwen3NextModel,
+    Qwen3NextDecoderLayer,
     Qwen3NextMLP,
-    OutputRecorder
+    Qwen3NextModel,
+    Qwen3NextPreTrainedModel,
+    Qwen3NextSparseMoeBlock,
 )
 
-from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig
-from transformers.utils.deprecation import deprecate_kwarg
-from transformers.modeling_outputs import MoeCausalLMOutputWithPast
-
-from mycelia.shared.config import MinerConfig, ValidatorConfig
-from mycelia.shared.expert_manager import get_layer_expert_id, ExpertManager
 from mycelia.shared.app_logging import structlog
+from mycelia.shared.config import MinerConfig
+from mycelia.shared.expert_manager import ExpertManager
 from mycelia.shared.helper import *
+
 
 logger = structlog.get_logger(__name__)
 

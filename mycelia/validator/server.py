@@ -1,33 +1,33 @@
-# app.py
-import os
-import re
-import aiofiles
-import tempfile
-import zipfile
+import contextlib
+import glob
 import hashlib
 import mimetypes
-import contextlib
+import os
+import re
+import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List
-import uvicorn
-import glob
+from typing import List, Optional
 
+import aiofiles
 import bittensor
-from fastapi import FastAPI, HTTPException, Header, Request, File, UploadFile, Form
+import uvicorn
+from fastapi import File, Form, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from mycelia.shared.config import MinerConfig, ValidatorConfig
+
+from mycelia.shared.app_logging import configure_logging, structlog
 from mycelia.shared.checkpoint import (
+    delete_old_checkpoints_by_hotkey,
     get_resume_info,
-    load_checkpoint,
-    delete_old_checkpoints_by_hotkey
 )
-
-from mycelia.shared.config import MinerConfig, parse_args
-from mycelia.shared.app_logging import structlog, configure_logging
-from mycelia.shared.schema import verify_message, construct_block_message, construct_model_message
-
+from mycelia.shared.config import ValidatorConfig, parse_args
+from mycelia.shared.schema import (
+    construct_block_message,
+    construct_model_message,
+    verify_message,
+)
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 configure_logging()

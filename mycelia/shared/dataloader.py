@@ -1,14 +1,17 @@
 from __future__ import annotations
+
 import logging
 from functools import partial
-from typing import Dict, Iterator, Optional, Callable
+from typing import Callable, Dict, Iterator, Optional
 
 from datasets import load_dataset
 from datasets.distributed import split_dataset_by_node
 from torch.utils.data import IterableDataset as TorchIterableDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+
 from mycelia.shared.helper import import_from_string
+
 
 logger = logging.getLogger(__name__)
 

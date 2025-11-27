@@ -1,58 +1,21 @@
-"""
-MoE model utilities: convert dense models to MoE-style, define custom sparse blocks,
-and provide helpers for partial (grouped) expert execution.
-
-Contents
---------
-- DenseBlock: wraps DeepseekV3 MLP to behave like a "dense" block while preserving API
-- myceliaSparseMoeBlock: sparse MoE block that activates only a subset of experts (by group)
-- CustomMoE: an DeepseekV3 model variant that interleaves MoE and dense blocks
-- get_base_model: load base LLaMA or OLMo, optionally convert to MoE
-- get_base_tokenizer: load tokenizer (HF login via env var if provided)
-- dense_model_to_moe: transform a dense model into DeepseekV3 parameter layout
-- get_layer_expert_id: parse layer/expert indices from parameter names
-- partial_moe: drop experts outside the current group and rebuild a partial model
-
-Assumptions
------------
-- Parameter names use DeepseekV3/transformers conventions (e.g., "model.layers.{i}.mlp.experts.{e}").
-- Experts are identified by the "experts.{expert_id}" path segment.
-- Your `Config` provides fields used by `get_base_model` and `get_base_tokenizer`.
-"""
-
 from __future__ import annotations
 
-import os
-import re
-import copy
-import logging
-from typing import Dict, List, Optional, Tuple, Union
 from collections import OrderedDict
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from huggingface_hub import login
-from transformers import (
-    AutoConfig,
-    AutoTokenizer,
-    LlamaConfig,
-    LlamaForCausalLM,
-    OlmoForCausalLM,
-    AutoModelForCausalLM,
-    PretrainedConfig,
+from transformers import AutoTokenizer
+
+from mycelia.shared.app_logging import structlog
+from mycelia.shared.config import MinerConfig, ValidatorConfig
+from mycelia.shared.expert_manager import ExpertManager
+from mycelia.shared.helper import *
+from mycelia.shared.modeling.custom_qwen3_next import (
+    CustomQwen3NextModel,
+    get_moe_model_config,
 )
 
-from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
-from transformers.utils.deprecation import deprecate_kwarg
-from transformers.modeling_outputs import MoeCausalLMOutputWithPast
-
-# from mycelia.shared.modeling.custom_deepseek import CustomDeekSeekMoE, get_moe_model_config
-from mycelia.shared.modeling.custom_qwen3_next import CustomQwen3NextModel, get_moe_model_config
-from mycelia.shared.config import MinerConfig, ValidatorConfig
-from mycelia.shared.expert_manager import get_layer_expert_id, ExpertManager
-from mycelia.shared.app_logging import structlog
-from mycelia.shared.helper import *
 
 logger = structlog.get_logger(__name__)
 

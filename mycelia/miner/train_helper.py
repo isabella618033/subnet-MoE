@@ -1,49 +1,15 @@
-import os
 import gc
-import time
 import logging
-import json
-import fsspec
-from functools import partial
-import copy
-from typing import Tuple, Union, Optional, Dict, Any
 from collections.abc import Iterable, Sequence
+from typing import Any, Dict, Optional, Union
 
 import torch
-import torch.distributed as dist
-import torch.multiprocessing as mp
-from torch.nn.utils import clip_grad_norm_
-import torch.distributed.rpc as rpc
-
-from transformers import (
-    get_cosine_schedule_with_warmup,
-)
 
 from mycelia.shared.config import MinerConfig, ValidatorConfig
-from mycelia.shared.metrics import MetricLogger
-from mycelia.shared.model import get_base_model, partial_moe
-from mycelia.shared.modeling.mycelia import get_base_tokenizer
-from mycelia.shared.dataloader import get_dataloader
-from mycelia.shared.checkpoint import (
-    get_resume_info,
-    save_checkpoint,
-    load_checkpoint,
-    delete_old_checkpoints,
-)
-from mycelia.shared.expert_manager import (
-    ExpertManager,
-    create_expert_groups,
-    sync_expert_weights,
-    sync_weights,
-    get_weight_sum,
-    broadcast_weights,
-)
-from mycelia.shared.evaluate import (
-    evaluate_model,
-)
+from mycelia.shared.expert_manager import get_weight_sum
 
 # Configure the basic logging setup
-logger = logging.getLogger("diloco.train")
+logger = logging.getLogger(__name__)
 
 
 def free_cuda_models(

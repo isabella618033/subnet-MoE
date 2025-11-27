@@ -1,12 +1,10 @@
-from substrateinterface import Keypair
-import bittensor as bt
-import torch 
-import hashlib 
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Union
-from dataclasses import dataclass, asdict, fields
-from typing import Any, Type, TypeVar, Union
+import hashlib
+
+import bittensor as bt
+import torch
+from substrateinterface import Keypair
 
 @dataclass
 class SignedMessage:

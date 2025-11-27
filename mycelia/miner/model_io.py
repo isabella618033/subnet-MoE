@@ -1,30 +1,22 @@
-import os
-import sys
 import time
-import json
-import hashlib
-import logging
-import signal
 from pathlib import Path
-from typing import Optional, Tuple, List, Any
 
-from collections import Counter
-import bittensor
-import requests
-from requests.exceptions import RequestException, Timeout, ConnectionError as ReqConnectionError
+from requests.exceptions import (
+    ConnectionError as ReqConnectionError,
+    RequestException,
+    Timeout,
+)
 
-import bittensor
-from mycelia.shared.chain import serve_axon, get_status, commit_status, MinerStatus
-from mycelia.shared.checkpoint import get_resume_info, delete_old_checkpoints
+from mycelia.miner.client import download_model, submit_model
+from mycelia.shared.app_logging import configure_logging, structlog
+from mycelia.shared.chain import MinerStatus, commit_status
+from mycelia.shared.checkpoint import delete_old_checkpoints, get_resume_info
 from mycelia.shared.config import MinerConfig, parse_args
-from mycelia.miner.client import submit_model, download_model
-from mycelia.shared.app_logging import structlog, configure_logging
 from mycelia.shared.cycle import (
-    setup_chain_worker,
     scan_for_new_model,
-    should_submit_model,
     search_model_submission_destination,
-    get_validator_miner_assignment,
+    setup_chain_worker,
+    should_submit_model,
 )
 
 configure_logging()

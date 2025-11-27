@@ -1,14 +1,14 @@
 import fnmatch
-from typing import List, Tuple, Dict, Any
+from typing import Any, Dict, List, Tuple
+
 import torch
 import torch.nn as nn
 
 import hivemind
 from hivemind.averaging import DecentralizedAverager
 
+from mycelia.shared.app_logging import structlog
 from mycelia.shared.expert_manager import get_layer_expert_id
-from mycelia.shared.app_logging import structlog, configure_logging
-
 
 logger = structlog.get_logger(__name__)
 

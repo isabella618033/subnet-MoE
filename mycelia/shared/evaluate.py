@@ -1,49 +1,12 @@
-"""
-Distributed evaluation utilities for sharded model checkpoints (RPC-based).
-
-This module provides:
-  * Lightweight RPC helpers (`send_shard`, `mark_done`) for workers to stream
-    shard state_dicts to a dedicated evaluator node.
-  * An `Evaluator` actor that collects shards per step, assembles the full model,
-    runs evaluation, and logs metrics.
-  * Helpers to assemble the model and to run the evaluation loop.
-
-Assumptions
------------
-* Workers send CPU tensors (cheaper to serialize) as shard state_dicts.
-* There exists a project-level logger named `logger`.
-* Project utilities provide:
-    - get_base_model(config)       -> nn.Module
-    - get_base_tokenizer(config)   -> HF tokenizer
-    - get_dataloader(config, ...)  -> eval dataloader
-    - MetricLogger(config).log(dict)
-"""
-
 from __future__ import annotations
 
-import gc
-import threading
-import time
-from typing import Dict, Optional, Tuple, Any
-from tqdm import tqdm
+from typing import Dict, Optional
 
 import torch
 from torch import nn
-import logging
+from tqdm import tqdm
 
-import hashlib
-from typing import Dict, List, Any
-
-from torch.distributed import rpc
-from torch.futures import Future
-from mycelia.shared.chain import get_status, MinerStatus
-from mycelia.shared.config import WorkerConfig
 from mycelia.shared.app_logging import structlog
-from mycelia.shared.metrics import MetricLogger
-from mycelia.shared.model import get_base_model
-from mycelia.shared.modeling.mycelia import get_base_tokenizer
-from mycelia.shared.dataloader import get_dataloader
-from mycelia.shared.expert_manager import ExpertManager
 
 logger = structlog.getLogger(__name__)
 

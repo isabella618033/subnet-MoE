@@ -1,48 +1,39 @@
-import os
-import gc
-import time
-import logging
-import json
-import fsspec
-import datetime
-from functools import partial
 import copy
-from typing import Tuple, Union, Optional, Dict, Any
-from collections.abc import Iterable, Sequence
+import datetime
+import gc
+import os
+import time
+from typing import Tuple
 
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.utils import clip_grad_norm_
-import torch.distributed.rpc as rpc
 from torchdata.stateful_dataloader import StatefulDataLoader
 
-from transformers import get_cosine_schedule_with_warmup, PreTrainedTokenizerBase
+from transformers import (
+    PreTrainedTokenizerBase,
+    get_cosine_schedule_with_warmup,
+)
 
+from mycelia.miner.train_helper import free_cuda_models, get_status
+from mycelia.shared.app_logging import configure_logging, structlog
+from mycelia.shared.checkpoint import (
+    delete_old_checkpoints,
+    get_resume_info,
+    load_checkpoint,
+    save_checkpoint,
+    start_model_from,
+)
 from mycelia.shared.config import MinerConfig, parse_args
-from mycelia.shared.app_logging import structlog, configure_logging
+from mycelia.shared.dataloader import get_dataloader
+from mycelia.shared.evaluate import evaluate_model
+from mycelia.shared.expert_manager import ExpertManager
+from mycelia.shared.helper import *
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import load_model
-from mycelia.shared.modeling.mycelia import get_base_tokenizer, partial_moe
-from mycelia.shared.dataloader import get_dataloader, HFStreamingTorchDataset
-from mycelia.miner.train_helper import free_cuda_models, get_status
-from mycelia.shared.evaluate import evaluate_model
-from mycelia.shared.checkpoint import (
-    get_resume_info,
-    save_checkpoint,
-    load_checkpoint,
-    delete_old_checkpoints,
-    start_model_from
-)
-from mycelia.shared.expert_manager import (
-    ExpertManager,
-    create_expert_groups,
-    sync_expert_weights,
-    sync_weights,
-    get_weight_sum,
-    broadcast_weights,
-)
-from mycelia.shared.helper import *
+from mycelia.shared.modeling.mycelia import get_base_tokenizer
+
 
 configure_logging()
 logger = structlog.get_logger(__name__)

@@ -1,28 +1,27 @@
 import os
-import torch
-import fsspec
-from typing import Tuple
-
-from pathlib import Path
-import re
-import os
-
-import os
-import torch
-from typing import Dict, Tuple, Optional, List
-
 from copy import deepcopy
-from mycelia.shared.config import MinerConfig, ValidatorConfig
+from pathlib import Path
+from typing import Dict, Tuple
+
+import fsspec
+import torch
 from fsspec.generic import GenericFileSystem
 from torchdata.stateful_dataloader import StatefulDataLoader
+
 from mycelia.shared.app_logging import structlog
-from mycelia.shared.helper import parse_dynamic_filename, get_nested_attr
-from mycelia.shared.expert_manager import ExpertManager, ExpertAssignments, get_layer_expert_id
+from mycelia.shared.config import MinerConfig, ValidatorConfig
+from mycelia.shared.expert_manager import (
+    ExpertAssignments,
+    ExpertManager,
+    get_layer_expert_id,
+)
+from mycelia.shared.helper import get_nested_attr, parse_dynamic_filename
+
 
 logger = structlog.getLogger(__name__)
  
 
-def start_model_from(rank: int, config: MinerConfig) -> Tuple[bool, int | None, int | None, str | Path]:
+def start_model_from(rank: int, config: MinerConfig) -> Tuple[bool, Dict , str | Path | None]:
 
     # if it is a validator, then just start from its own checkpoint 
     if get_nested_attr(config, "miner.validator_checkpoint_path", True): 
@@ -36,11 +35,11 @@ def start_model_from(rank: int, config: MinerConfig) -> Tuple[bool, int | None, 
         logger.info('miner checkpoint not found')
         return validator_ckpt_found, validator_version['globalver'], latest_validator_ckpt
     
-    if not validator_ckpt_found:
+    if not validator_ckpt_found and latest_miner_ckpt is not None:
         logger.info('validator checkpoint not found')
         return miner_ckpt_found, miner_version, latest_miner_ckpt/'model.pt'
     
-    if miner_version['globalver'] >= validator_version['globalver']:
+    if miner_version['globalver'] >= validator_version['globalver'] and latest_miner_ckpt is not None:
         logger.info(f'miner checkpoint version {miner_version["globalver"], miner_version["inneropt"]} > validator checkpoint version {validator_version["globalver"]}')
         return miner_ckpt_found, miner_version, latest_miner_ckpt/'model.pt'
     else:
@@ -48,7 +47,7 @@ def start_model_from(rank: int, config: MinerConfig) -> Tuple[bool, int | None, 
         return validator_ckpt_found, miner_version['globalver'], latest_validator_ckpt
 
 
-def get_resume_info(rank: int, config: MinerConfig | ValidatorConfig, path : Path | None = None) -> tuple[bool, dict, Path | None]:
+def get_resume_info(rank: int, config: MinerConfig | ValidatorConfig, path : Path | None = None) -> Tuple[bool, dict, Path | None]:
     """
     Retrieves the resume information for a given rank and checkpoint configuration.
 

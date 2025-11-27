@@ -1,69 +1,53 @@
-import os
-import gc
 import asyncio
-import time
-import logging
-import json
-import fsspec
 import copy
-import datetime
+import gc
+import os
 import secrets
-from functools import partial
-import copy
-from typing import Tuple, Union, Optional, Dict, Any, List
-from collections.abc import Iterable, Sequence
-
-import torch
-import torch.nn as nn
-import torch.distributed as dist
-import torch.multiprocessing as mp
-from torch.nn.utils import clip_grad_norm_
-import torch.distributed.rpc as rpc
-from torchdata.stateful_dataloader import StatefulDataLoader
-
-from transformers import get_cosine_schedule_with_warmup, PreTrainedTokenizerBase
+import time
+from typing import Any, Dict, List, Tuple
 
 import bittensor
+import torch
+import torch.nn as nn
 from hivemind.averaging import DecentralizedAverager
+from torchdata.stateful_dataloader import StatefulDataLoader
+from transformers import PreTrainedTokenizerBase
 
-from mycelia.mock.validator.run import add_grad_noise
-from mycelia.shared.chain import commit_status, ValidatorStatus
-from mycelia.shared.config import MinerConfig, ValidatorConfig, parse_args
-from mycelia.shared.app_logging import structlog, configure_logging
-from mycelia.shared.metrics import MetricLogger
-from mycelia.shared.model import load_model
-from mycelia.shared.modeling.mycelia import get_base_tokenizer, partial_moe
-from mycelia.shared.dataloader import get_dataloader, HFStreamingTorchDataset
-from mycelia.miner.train_helper import free_cuda_models, get_status
-from mycelia.shared.evaluate import evaluate_model
+from mycelia.miner.train_helper import get_status
+from mycelia.shared.app_logging import configure_logging, structlog
+from mycelia.shared.chain import ValidatorStatus, commit_status, serve_axon
 from mycelia.shared.checkpoint import (
-    get_resume_info,
-    save_checkpoint,
-    load_checkpoint,
     delete_old_checkpoints,
+    get_resume_info,
+    load_checkpoint,
+    save_checkpoint,
 )
+from mycelia.shared.config import ValidatorConfig, parse_args
+from mycelia.shared.cycle import gather_validation_job, should_start_validation
+from mycelia.shared.dataloader import get_dataloader
+from mycelia.shared.evaluate import evaluate_model
 from mycelia.shared.expert_manager import (
     ExpertManager,
-    create_expert_groups,
-    sync_expert_weights,
-    sync_weights,
     get_weight_sum,
-    broadcast_weights,
     populate_global_grads_from_local,
 )
 from mycelia.shared.helper import *
-from mycelia.shared.chain import serve_axon
+from mycelia.shared.metrics import MetricLogger
+from mycelia.shared.model import load_model
+from mycelia.shared.modeling.mycelia import get_base_tokenizer
 from mycelia.validator.aggregator import MinerScoreAggregator
+from mycelia.validator.evaluator import (
+    MinerEvalJob,
+    load_model_from_path,
+    run_evaluation,
+)
 from mycelia.validator.inter_validator_connection import (
-    connect_with_peers,
     build_averagers_from_buff,
     build_grad_buff_from_model,
+    connect_with_peers,
     pack_grads,
     unpack_to_grads,
 )
-from mycelia.validator.evaluator import run_evaluation, MinerEvalJob, load_model_from_path
-from mycelia.shared.cycle import gather_validation_job, should_start_validation
-
 
 configure_logging()
 logger = structlog.get_logger(__name__)

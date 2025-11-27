@@ -1,10 +1,12 @@
 from __future__ import annotations
-import bittensor as bt
-from mycelia.shared.config import WorkerConfig
-from typing import Optional, Dict, List
-from pydantic import BaseModel
-import json
 
+import json
+from typing import Dict, Optional
+
+import bittensor as bt
+from pydantic import BaseModel
+
+from mycelia.shared.config import WorkerConfig
 
 # --- Info gather ---
 def get_active_validator_info() -> Optional[Dict]:
@@ -25,14 +27,14 @@ class WorkerStatus(BaseModel):
 
 
 class ValidatorStatus(BaseModel):
-    model_hash: str = None
-    model_version: int = None
-    expert_group: int = None  # block
-    miner_seed: int = None
+    model_hash: str | None = None
+    model_version: int | None = None
+    expert_group: int | None = None  # block
+    miner_seed: int | None = None
 
 
 class MinerStatus(BaseModel):
-    expert_group: int = None
+    expert_group: int | None = None
 
 
 def commit_status(

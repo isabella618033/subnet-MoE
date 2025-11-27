@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
-# download_checkpoint.py
 import argparse
+import hashlib
 import os
 import sys
-import requests
-import hashlib
-from time import time
-import hashlib
-import os
 import zipfile
+from pathlib import Path
+from time import time
 from typing import Any, Dict, Optional
+
 import requests
 from requests import Response
-from pathlib import Path
-from requests.exceptions import RequestException, Timeout, ConnectionError as ReqConnectionError
-from substrateinterface import Keypair 
-from mycelia.shared.schema import construct_block_message, construct_model_message, sign_message, verify_message, SignedDownloadRequestMessage, SignedModelSubmitMessage
+from requests.exceptions import (
+    ConnectionError as ReqConnectionError,
+    RequestException,
+    Timeout,
+)
 
+from substrateinterface import Keypair
+
+from mycelia.shared.schema import (
+    SignedDownloadRequestMessage,
+    SignedModelSubmitMessage,
+    construct_block_message,
+    construct_model_message,
+    sign_message,
+)
 CHUNK = 1024 * 1024  # 1 MiB
 
 

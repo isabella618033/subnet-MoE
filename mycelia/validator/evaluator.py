@@ -1,36 +1,17 @@
-#!/usr/bin/env python3
-"""
-Async validator pipeline:
-1) gather miner info (mocked here)
-2) download models from miners (uses provided download(url, token, out, ...))
-3) push model jobs into an asyncio.Queue
-4) evaluator workers pop jobs, load models, call evaluate_model(...)
-5) aggregate scores with MinerScoreAggregator (resets on hotkey change)
-
-Swap out the MOCK sections with your real logic.
-"""
-
 from __future__ import annotations
 
 import asyncio
 import dataclasses
-import os
-import random
-import tempfile
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
-from mycelia.miner.client import download_model
-from mycelia.shared.evaluate import evaluate_model
-from mycelia.shared.app_logging import structlog, configure_logging
-from mycelia.shared.dataloader import get_dataloader, HFStreamingTorchDataset
-
-logger = structlog.get_logger(__name__)
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
+from mycelia.shared.app_logging import structlog
+from mycelia.shared.dataloader import get_dataloader
+from mycelia.shared.evaluate import evaluate_model
+
+logger = structlog.get_logger(__name__)
 
 # -----------------------------------------------------------------------------
 @dataclasses.dataclass(frozen=True)

@@ -1,26 +1,16 @@
-# llm_weightnet/shared/model.py
 from __future__ import annotations
 
-import io
-import json
-from pathlib import Path
 from typing import Optional, Tuple
 
-import requests
-import torch
 from torch import nn
 
-from mycelia.shared.config import MinerConfig, ValidatorConfig
-from mycelia.shared.app_logging import structlog
-from mycelia.shared.expert_manager import ExpertManager, create_expert_groups
-from mycelia.shared.modeling.mycelia import get_base_model
 from mycelia.shared import chain
-from mycelia.shared.checkpoint import (
-    get_resume_info,
-    load_checkpoint,
-    start_model_from
-)
+from mycelia.shared.app_logging import structlog
+from mycelia.shared.checkpoint import load_checkpoint, start_model_from
+from mycelia.shared.config import MinerConfig, ValidatorConfig
+from mycelia.shared.expert_manager import ExpertManager
 from mycelia.shared.helper import *
+from mycelia.shared.modeling.mycelia import get_base_model
 
 logger = structlog.get_logger(__name__)
 

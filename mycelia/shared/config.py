@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import re
-from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
-import yaml
+from typing import Dict, List, Optional
+
 import fsspec
 import torch
-from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt, field_validator, model_validator
+import yaml
 import bittensor
+from pydantic import model_validator, PositiveInt, BaseModel
 
-from mycelia.shared.app_logging import structlog, configure_logging
-from mycelia.shared.helper import deep_update, convert_to_str
+from mycelia.shared.app_logging import configure_logging, structlog
+from mycelia.shared.helper import convert_to_str
+
 
 configure_logging()
 logger = structlog.get_logger(__name__)
@@ -213,26 +213,7 @@ class WorkerConfig(BaseConfig):
     # -----------------------
     # Derivations & hygiene
     # -----------------------
-    @model_validator(mode="after")
-    def _derive_all(self):
 
-        if hasattr(self, "local_par"):
-            if self.local_par.gradient_accumulation_steps == 0:
-                # ceil(batch_size / per_device_train_batch_size)
-                g = math.ceil(self.data.batch_size / self.data.per_device_train_batch_size)
-                self.local_par.gradient_accumulation_steps = max(1, int(g))
-
-            goi = self.local_par.global_opt_interval
-            if self.ckpt.checkpoint_interval is None:
-                self.ckpt.checkpoint_interval = max(1, round(goi * 0.2))
-            if self.ckpt.full_validation_interval is None:
-                self.ckpt.full_validation_interval = max(1, round(goi * 0.2))
-            if self.log.metric_interval is None:
-                self.log.metric_interval = max(1, round(goi * 0.2))
-            if self.moe.expert_rotate_interval is None:
-                self.moe.expert_rotate_interval = max(1, round(goi))
-
-        return self
 
     def __init__(self, **data):
         """
@@ -425,6 +406,35 @@ class MinerConfig(WorkerConfig):
     role: str = 'miner'
     miner: MinerCfg = MinerCfg()
     local_par: ParallelismCfg = ParallelismCfg()
+
+
+    def __init__(self, **data):
+        """
+        Initialize, validate derived fields, and auto-bump `run_name` if an on-disk
+        config exists and differs.
+        """
+        super().__init__(**data)        
+        os.makedirs(self.miner.validator_checkpoint_path, exist_ok=True)
+
+    @model_validator(mode="after")
+    def _derive_all(self):
+        if self.local_par.gradient_accumulation_steps == 0:
+            # ceil(batch_size / per_device_train_batch_size)
+            g = math.ceil(self.task.data.batch_size / self.task.data.per_device_train_batch_size)
+            self.local_par.gradient_accumulation_steps = max(1, int(g))
+
+        goi = self.local_par.global_opt_interval
+       
+        if self.ckpt.checkpoint_interval is None:
+            self.ckpt.checkpoint_interval = max(1, round(goi * 0.2))
+        if self.ckpt.full_validation_interval is None:
+            self.ckpt.full_validation_interval = max(1, round(goi * 0.2))
+        if self.log.metric_interval is None:
+            self.log.metric_interval = max(1, round(goi * 0.2))
+        if self.moe.expert_rotate_interval is None:
+            self.moe.expert_rotate_interval = max(1, round(goi))
+
+        return self
 
 
 class ValidatorConfig(WorkerConfig):

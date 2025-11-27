@@ -1,34 +1,18 @@
-"""
-Expert (MoE) group management and distributed weight synchronization utilities.
-
-This module provides:
-  * `ExpertManager` to discover expert-bearing layers and compute rank/expert groupings.
-  * Helpers to deterministically split ranks/experts into groups.
-  * Utilities to create torch.distributed process groups per expert group.
-  * Synchronization primitives to average either shared weights (global) or expert
-    weights (within each expert group), plus broadcasting helpers.
-
-Assumptions
------------
-* `torch.distributed` has been initialized (e.g., `init_process_group`) before calling
-  any collective ops here.
-* "Expert" parameters are identified by the substring `"expert"` in their names. Adjust
-  `is_expert_param` if your naming differs (e.g., `"experts."`).
-"""
-
 from __future__ import annotations
-import re
-import random
+
 import json
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Tuple, Optional
-from pathlib import Path 
+import random
+import re
+from pathlib import Path
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 
-from mycelia.shared.config import TaskCfg, WorkerConfig
 from mycelia.shared.app_logging import structlog
+from mycelia.shared.config import TaskCfg, WorkerConfig
+
 
 logger = structlog.getLogger(__name__)
 

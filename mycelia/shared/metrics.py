@@ -1,33 +1,18 @@
-"""
-Metric logging utilities.
-
-This module provides a small logger that:
-  1) Appends metrics to a local CSV at `config.log.metric_path`, harmonizing columns over time.
-  2) Optionally logs the same metrics to Weights & Biases (W&B) when `config.log_wandb=True`.
-
-Usage
------
-logger = MetricLogger(config)
-logger.log({"step": 10, "val_loss": 1.23})
-logger.close()
-"""
-
 from __future__ import annotations
 
-import os
 import json
 import logging
+import os
 from typing import Any, Dict, Mapping, Optional
 
-import pandas as pd
-import torch
 import pandas as pd
 import torch
 import wandb
 
 from mycelia.shared.config import MinerConfig, ValidatorConfig
 
-logger = logging.getLogger("diloco.metrics")
+
+logger = logging.getLogger(__name__)
 
 
 class MetricLogger:
