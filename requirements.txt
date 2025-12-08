@@ -20,7 +20,7 @@ bitsandbytes==0.43.1; platform_system == "Linux"
 # -----------------------------
 # API / server (for validator, optional)
 # -----------------------------
-fastapi==0.115.0
+fastapi==0.110.1
 uvicorn[standard]==0.30.0
 requests==2.32.3
 
@@ -69,7 +69,11 @@ fastapi
 uvicorn
 aiofiles
 python-multipart
-git+https://github.com/learning-at-home/hivemind.git@master
+# git+https://github.com/learning-at-home/hivemind.git@master
 matplotlib
 transformers==4.57.1
-substrate-interface
+pandas
+# substrate-interface
+matplotlib
+bittensor==9.12.2 
+plotly
