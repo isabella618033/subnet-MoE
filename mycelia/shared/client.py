@@ -97,7 +97,7 @@ def submit_model(
     if extra_form:
         # stringify non-bytes for safety in form data
         for k, v in extra_form.items():
-            data[k] = v if isinstance(v, (str, bytes)) else str(v)
+            data[k] = v if isinstance(v, str | bytes) else str(v)
 
     # --- retry loop for transient failures ---
     attempt = 0

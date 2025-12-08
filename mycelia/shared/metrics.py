@@ -109,7 +109,7 @@ class MetricLogger:
         # Flatten list/tensor values
         flat_metrics = {}
         for k, v in metrics.items():
-            if isinstance(v, (list, tuple)):
+            if isinstance(v, list | tuple):
                 flat_metrics[k] = v[0] if len(v) == 1 else str(v)
             elif torch.is_tensor(v):
                 flat_metrics[k] = v.item() if v.ndim == 0 else v.detach().cpu().tolist()
@@ -166,7 +166,7 @@ class MetricLogger:
         for k, v in metrics.items():
             if torch.is_tensor(v):
                 flat[k] = v.item() if v.ndim == 0 else v.detach().cpu().tolist()
-            elif isinstance(v, (list, tuple)):
+            elif isinstance(v, list | tuple):
                 flat[k] = v[0] if len(v) == 1 else str(v)
             else:
                 flat[k] = v
