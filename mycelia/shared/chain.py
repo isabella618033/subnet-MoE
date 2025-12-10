@@ -187,7 +187,7 @@ def scan_chain_for_new_model(
 
 def fetch_model_from_chain(
     current_model_meta: ModelMeta | None, config: WorkerConfig, subtensor: bittensor.Subtensor, wallet: bittensor.Wallet
-) -> None:
+) -> dict | None:
     should_download, download_metas = scan_chain_for_new_model(current_model_meta, config, subtensor)
 
     logger.info("Fetching model from chain", should_download=should_download)
@@ -240,7 +240,7 @@ def fetch_model_from_chain(
                         current_model_version=current_model_version,
                         current_model_hash=current_model_hash,
                     )
-                    break
+                    return download_meta
                 except Exception:
                     logger.warning("Download failed", url)
 
@@ -253,3 +253,5 @@ def fetch_model_from_chain(
 
         if not download_success:
             logger.error("❌ All download attempts failed after %d retries.", retries)
+
+            return None

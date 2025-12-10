@@ -1,7 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from queue import Queue
-from threading import Thread
+from threading import Lock, Thread
 
 from mycelia.shared.app_logging import configure_logging, structlog
 from mycelia.shared.chain import MinerChainCommit, commit_status
@@ -31,6 +31,14 @@ class Job:
     job_type: JobType
     payload: dict | None = None
     phase_end_block: int | None = None
+
+
+@dataclass
+class SharedState:
+    current_model_version: int | None = None
+    current_model_hash: str | None = None
+    latest_checkpoint_path: str | None = None
+    lock: Lock = field(default_factory=Lock, repr=False)
 
 
 # --- Scheduler service ---
@@ -66,6 +74,7 @@ def download_worker(
     download_queue: Queue,
     current_model_version,
     current_model_hash,
+    shared_state: SharedState,
 ):
     """
     Consumes DOWNLOAD jobs and runs the download phase logic.
@@ -73,8 +82,26 @@ def download_worker(
     while True:
         job = download_queue.get()
         try:
-            # --------- DOWNLOAD PHASE ---------
-            fetch_model_from_chain(current_model_version, current_model_hash, config)
+            # Read current version/hash snapshot
+            with shared_state.lock:
+                current_model_version = shared_state.current_model_version
+                current_model_hash = shared_state.current_model_hash
+
+            download_meta = fetch_model_from_chain(
+                current_model_version,
+                current_model_hash,
+                config,
+            )
+
+            if download_meta is None or "model_version" not in download_meta or "model_hash" not in download_meta:
+                msg = f"[download_worker] Invalid download_meta received: {download_meta}"
+                raise ValueError(msg)
+
+            # Update shared state with new version/hash
+            with shared_state.lock:
+                shared_state.current_model_version = download_meta["model_version"]
+                shared_state.current_model_hash = download_meta["model_hash"]
+
             delete_old_checkpoints(
                 config.ckpt.validator_checkpoint_path,
                 config.ckpt.checkpoint_topk,
@@ -91,6 +118,7 @@ def commit_worker(
     commit_queue: Queue,
     wallet,
     subtensor,
+    shared_state: SharedState,
 ):
     """
     Consumes COMMIT model and runs the submission phase logic.
@@ -98,8 +126,11 @@ def commit_worker(
     while True:
         job = commit_queue.get()
         try:
-            # --------- SUBMISSION PHASE ---------
             _, _, latest_checkpoint_path = get_resume_info(rank=0, config=config)
+
+            with shared_state.lock:
+                shared_state.latest_checkpoint_path = latest_checkpoint_path
+
             model_path = (f"{latest_checkpoint_path}/model.pt",)
             model_hash = get_model_hash(model_path)
             commit_status(
@@ -123,6 +154,7 @@ def submit_worker(
     submit_queue: Queue,
     wallet,
     subtensor,
+    shared_state: SharedState,
 ):
     """
     Consumes SUBMIT jobs and runs the submission phase logic.
@@ -130,8 +162,8 @@ def submit_worker(
     while True:
         job = submit_queue.get()
         try:
-            # --------- SUBMISSION PHASE ---------
-            _, _, latest_checkpoint_path = get_resume_info(rank=0, config=config)
+            with shared_state.lock:
+                latest_checkpoint_path = shared_state.latest_checkpoint_path
 
             destination_axon = search_model_submission_destination(
                 wallet=wallet,
