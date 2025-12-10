@@ -1,10 +1,10 @@
-import hashlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import bittensor as bt
-import torch
 from substrateinterface import Keypair
+
+from mycelia.shared.helper import get_model_hash
 
 
 @dataclass
@@ -32,49 +32,18 @@ class SignedModelSubmitMessage(SignedMessage):
     pass
 
 
-def serialize_torch_model_path(model_path: str) -> bytes:
-    """
-    Load a torch model from disk and serialize its state_dict
-    deterministically into raw bytes.
-    """
-    state = torch.load(model_path, map_location="cpu")
-
-    # If it's a full model, extract state_dict
-    if isinstance(state, torch.nn.Module):
-        state = state.state_dict()
-    elif not isinstance(state, dict):
-        raise ValueError("Model file must contain a state_dict or nn.Module")
-
-    buffer = []
-    for key, tensor in state.items():
-        buffer.append(key.encode())
-        buffer.append(tensor.cpu().numpy().tobytes())
-
-    return b"".join(buffer)
-
-
-def hash_model_bytes(model_bytes: bytes) -> bytes:
-    """
-    Blake2b-256 hash (32 bytes) of the model.
-    """
-    return hashlib.blake2b(model_bytes, digest_size=32).digest()
-
-
 def construct_model_message(model_path: str | Path, target_hotkey_ss58: str, block: int):
     """
     Sign:
         model_hash(32 bytes) || construct_block_message(...)
     """
-    # 1. Serialize model → bytes
-    model_bytes = serialize_torch_model_path(model_path)
+    # 1. Get model hash
+    model_hash = get_model_hash(model_path)
 
-    # 2. Hash model to 32 bytes
-    model_hash = hash_model_bytes(model_bytes)
-
-    # 3. Create pubkey || block message
+    # 2. Create pubkey || block message
     block_msg = construct_block_message(target_hotkey_ss58, block)
 
-    # 4. Final message to sign
+    # 3. Final message to sign
     full_message = model_hash + block_msg
 
     return full_message

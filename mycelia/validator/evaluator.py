@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 
 from mycelia.shared.app_logging import structlog
-from mycelia.shared.cycle import get_combined_validator_seed
 from mycelia.shared.dataloader import get_dataloader
 from mycelia.shared.evaluate import evaluate_model
 
@@ -48,7 +47,6 @@ async def evaluator_worker(
     combinded_seed: str,
     max_eval_batches: int = EVAL_MAX_BATCHES,
     rank: int | None = None,
-    
 ):
     while True:
         job = await jobs_q.get()
@@ -77,7 +75,9 @@ async def evaluator_worker(
             jobs_q.task_done()
 
 
-async def run_evaluation(config, step, device, miners, score_aggregator, base_model: nn.Module, tokenizer, combinded_seed):
+async def run_evaluation(
+    config, step, device, miners, score_aggregator, base_model: nn.Module, tokenizer, combinded_seed
+):
     # Device & dataloader (MOCK). Replace eval_dataloader with a real one.
     miners_q: asyncio.Queue[MinerEvalJob] = asyncio.Queue()
 
@@ -88,7 +88,9 @@ async def run_evaluation(config, step, device, miners, score_aggregator, base_mo
     # Spin up evaluator workers
     eval_workers = [
         asyncio.create_task(
-            evaluator_worker(f"evaluator-{i+1}", config, miners_q, score_aggregator, device, base_model, tokenizer, combinded_seed)
+            evaluator_worker(
+                f"evaluator-{i+1}", config, miners_q, score_aggregator, device, base_model, tokenizer, combinded_seed
+            )
         )
         for i in range(EVAL_WORKERS)
     ]

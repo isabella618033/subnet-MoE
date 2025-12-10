@@ -38,11 +38,12 @@ class ValidatorChainCommit(BaseModel):
     model_hash: str | None = None
     model_version: int | None = None
     expert_group: int | None = None  # block
-    miner_seed: int | None = None
+    seed: int | None = None
 
 
 class MinerChainCommit(BaseModel):
     expert_group: int | None = None
+    model_hash: str | None = None
 
 
 def commit_status(
@@ -50,8 +51,40 @@ def commit_status(
     wallet: bittensor.Wallet,
     subtensor: bittensor.Subtensor,
     status: ValidatorChainCommit | MinerChainCommit,
-):
-    subtensor.set_commitment(wallet=wallet, netuid=config.chain.netuid, data=status.model_dump_json())
+    encrypted: bool = False,
+    n_blocks: int = 5,
+) -> None:
+    """
+    Commit the worker status to chain.
+
+    If encrypted=False:
+        - Uses subtensor.set_commitment (plain metadata, immediately visible).
+
+    If encrypted=True:
+        - Timelock-encrypts the status JSON using Drand.
+        - Stores it via the Commitments pallet so it will be revealed later
+          when the target Drand round is reached.
+
+    Assumes:
+        - config.chain.netuid: subnet netuid
+        - config.chain.timelock_rounds_ahead: how many Drand rounds in the future
+          you want the data to be revealed (fallback to 200 if missing).
+    """
+    # Serialize status first; same input for both plain + encrypted paths
+    data = status.model_dump_json()
+
+    if encrypted:
+        data = bittensor.extras.timelock.encrypt(
+            message=data.encode("utf-8"),
+            n_blocks=n_blocks,
+        )
+
+    subtensor.set_commitment(
+        wallet=wallet,
+        netuid=config.chain.netuid,
+        data=data,
+    )
+    return
 
 
 def get_chain_commits(
@@ -68,7 +101,7 @@ def get_chain_commits(
         try:
             chain_commit = (
                 ValidatorChainCommit.model_validate(status_dict)
-                if "model_hash" in status_dict
+                if "seed" in status_dict
                 else MinerChainCommit.model_validate(status_dict)
             )
         except Exception:

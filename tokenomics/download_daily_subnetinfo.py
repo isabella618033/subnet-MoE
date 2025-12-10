@@ -13,7 +13,7 @@ import json
 import os
 import traceback
 from dataclasses import asdict
-from datetime import date, datetime, timezone
+from datetime import date
 
 import bittensor as bt
 

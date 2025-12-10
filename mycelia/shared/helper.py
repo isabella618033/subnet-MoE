@@ -99,6 +99,7 @@ def parse_dynamic_filename(filename: str) -> dict:
 
     return meta
 
+
 def h256_int(*parts: Any) -> int:
     """Deterministic 256-bit hash -> int."""
     m = hashlib.sha256()
@@ -106,3 +107,43 @@ def h256_int(*parts: Any) -> int:
         m.update(str(p).encode("utf-8"))
         m.update(b"\x00")  # separator
     return int.from_bytes(m.digest(), "big")
+
+
+def serialize_torch_model_path(model_path: str) -> bytes:
+    """
+    Load a torch model from disk and serialize its state_dict
+    deterministically into raw bytes.
+    """
+    state = torch.load(model_path, map_location="cpu")
+
+    # If it's a full model, extract state_dict
+    if isinstance(state, torch.nn.Module):
+        state = state.state_dict()
+    elif not isinstance(state, dict):
+        raise ValueError("Model file must contain a state_dict or nn.Module")
+
+    buffer = []
+    for key, tensor in state.items():
+        buffer.append(key.encode())
+        buffer.append(tensor.cpu().numpy().tobytes())
+
+    return b"".join(buffer)
+
+
+def hash_model_bytes(model_bytes: bytes) -> bytes:
+    """
+    Blake2b-256 hash (32 bytes) of the model.
+    """
+    return hashlib.blake2b(model_bytes, digest_size=32).digest()
+
+
+def get_model_hash(model_path: str | Path):
+    """
+    Create a model hash from model mocated at specified path.
+    """
+    # 1. Serialize model → bytes
+    model_bytes = serialize_torch_model_path(model_path)
+
+    # 2. Hash model to 32 bytes
+    model_hash = hash_model_bytes(model_bytes)
+    return model_hash

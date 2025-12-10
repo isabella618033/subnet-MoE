@@ -1,4 +1,5 @@
 import hashlib
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,11 +41,21 @@ class PhaseNames:
     merge: str = "Merge"  # validator merge
 
 
-def should_act(config: MinerConfig, phase_name: PhaseNames) -> tuple[bool, int]:
+def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_seconds: int = 5):
+    should_submit = False
+    while not should_submit:
+        should_submit, blocks_till, phase_end_block = should_act(config, phase_name)
+        if should_submit is False and blocks_till > 0:
+            time.sleep(min(blocks_till, poll_fallback_seconds) * 12)
+
+    return should_submit, phase_end_block
+
+
+def should_act(config: MinerConfig, phase_name: PhaseNames) -> tuple[bool, int, int]:
     phase: PhaseResponse = get_phase(config)
     should_submit = phase.phase_name == phase_name
     blocks_till = get_blocks_until_next_phase()[phase_name]
-    return should_submit, blocks_till
+    return should_submit, blocks_till, phase.phase_end_block
 
 
 def search_model_submission_destination(
@@ -71,6 +82,7 @@ def setup_chain_worker(config):
         subtensor=subtensor,
     )
     return wallet, subtensor
+
 
 def assign_miners_to_validators(
     validators: dict[str, Any],  # {validator_id: seed}
@@ -125,6 +137,7 @@ def assign_miners_to_validators(
 
     return assignment
 
+
 def get_combined_validator_seed(config: WorkerConfig, subtensor: bittensor.Subtensor) -> str:
     """
     Deterministically combine validator seeds into a single hex string.
@@ -140,11 +153,13 @@ def get_combined_validator_seed(config: WorkerConfig, subtensor: bittensor.Subte
     combined_seed_str = "".join(str(validator_seeds[v]) for v in sorted(validator_seeds.keys()))
     return hashlib.sha256(combined_seed_str.encode()).hexdigest()
 
+
 def get_validator_miner_assignment(config: WorkerConfig, subtensor: bittensor.Subtensor):
     commits: tuple[WorkerChainCommit, bittensor.Neuron] = get_chain_commits(config, subtensor)
     validator_seeds = get_validator_seed_from_commit(config, commits)
     miners = get_miners_from_commit(config, commits)
     return assign_miners_to_validators(validator_seeds, miners)  # type: ignore
+
 
 def get_validator_seed_from_commit(config, commits):
     validator_seeds: dict[str, int] = {
@@ -155,6 +170,7 @@ def get_validator_seed_from_commit(config, commits):
     }
     return validator_seeds
 
+
 def get_miners_from_commit(config, commits):
     miners: list[str] = [
         neuron.hotkey
@@ -164,6 +180,7 @@ def get_miners_from_commit(config, commits):
     ]
 
     return miners
+
 
 def get_phase(config: WorkerConfig) -> PhaseResponse:
     """

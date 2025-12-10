@@ -341,7 +341,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                     score_aggregator=score_aggregator,
                     base_model=base_model,
                     tokenizer=tokenizer,
-                    combinded_seed=get_combined_validator_seed(config, subtensor)
+                    combinded_seed=get_combined_validator_seed(config, subtensor),
                 )
             )
 

@@ -171,9 +171,8 @@ def get_dataloader(
         rank=rank,
         world_size=world_size,
         train=train,
-        seed=seed,   # e.g. combined validator seed
-        fraction=config.task.data.vali_fraction,         # use ~20% of the dataset
-
+        seed=seed,  # e.g. combined validator seed
+        fraction=config.task.data.vali_fraction,  # use ~20% of the dataset
     )
 
     # Collator for causal LM (no MLM)
