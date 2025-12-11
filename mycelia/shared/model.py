@@ -8,7 +8,7 @@ from mycelia.shared.chain import fetch_model_from_chain
 from mycelia.shared.checkpoint import ModelMeta, load_checkpoint, start_model_from
 from mycelia.shared.config import MinerConfig, ValidatorConfig
 from mycelia.shared.expert_manager import ExpertManager
-from mycelia.shared.helper import *
+from mycelia.shared.helper import get_nested_attr
 from mycelia.shared.modeling.mycelia import get_base_model
 
 logger = structlog.get_logger(__name__)
@@ -20,6 +20,11 @@ def get_model_from_checkpoint(
     resume = False
     latest_checkpoint_path = None
 
+    logger.info(
+        "Get base model for checkpoint",
+        group_ids=[config.moe.my_expert_group_id] if config.role == "miner" else None,
+        partial=(config.role == "miner"),
+    )
     # get base model
     model = get_base_model(
         config,
@@ -27,6 +32,8 @@ def get_model_from_checkpoint(
         group_ids=[config.moe.my_expert_group_id] if config.role == "miner" else None,
         partial=(config.role == "miner"),
     ).to(config.model.device)
+
+    logger.info("Load base model for checkpoint")
 
     # load from checkpoint
     if get_nested_attr(config, "ckpt.resume_from_ckpt", False):

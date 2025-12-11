@@ -1,6 +1,7 @@
 import hashlib
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,13 @@ import requests
 from pydantic import BaseModel
 
 from mycelia.shared.app_logging import configure_logging, structlog
-from mycelia.shared.chain import MinerChainCommit, WorkerChainCommit, get_chain_commits, serve_axon
+from mycelia.shared.chain import (
+    MinerChainCommit,
+    ValidatorChainCommit,
+    WorkerChainCommit,
+    get_chain_commits,
+    serve_axon,
+)
 from mycelia.shared.config import MinerConfig, ValidatorConfig, WorkerConfig
 from mycelia.shared.helper import h256_int, parse_dynamic_filename
 from mycelia.validator.evaluator import MinerEvalJob
@@ -44,18 +51,27 @@ class PhaseNames:
 def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_seconds: int = 5):
     should_submit = False
     while not should_submit:
-        should_submit, blocks_till, phase_end_block = should_act(config, phase_name)
+        should_submit, blocks_till, phase_response = should_act(config, phase_name)
         if should_submit is False and blocks_till > 0:
-            time.sleep(min(blocks_till, poll_fallback_seconds) * 12)
+            sleep_sec = min(blocks_till, max(poll_fallback_seconds, blocks_till / 2)) * 12
 
-    return should_submit, phase_end_block
+            check_time = datetime.now() + timedelta(seconds=sleep_sec)
+            check_time_str = check_time.strftime("%H:%M:%S")
+
+            logger.info(
+                f"Waiting for phase <{phase_name}> to begin in {blocks_till} blocks, check again at {check_time_str}"
+            )
+            time.sleep(sleep_sec)
+
+    logger.info(f"Phase {phase_name} has started, {phase_response.blocks_remaining_in_phase} blocks left in phase.")
+    return should_submit, phase_response.phase_end_block
 
 
 def should_act(config: MinerConfig, phase_name: PhaseNames) -> tuple[bool, int, int]:
-    phase: PhaseResponse = get_phase(config)
-    should_submit = phase.phase_name == phase_name
-    blocks_till = get_blocks_until_next_phase()[phase_name]
-    return should_submit, blocks_till, phase.phase_end_block
+    phase_response: PhaseResponse = get_phase(config)
+    should_submit = phase_response.phase_name == phase_name
+    blocks_till = get_blocks_until_next_phase(config)[phase_name]
+    return should_submit, blocks_till, phase_response
 
 
 def search_model_submission_destination(
@@ -90,6 +106,7 @@ def assign_miners_to_validators(
 ) -> dict[str, list[str]]:
     n_v = len(validators)
     n_m = len(miners)
+
     if n_v == 0:
         raise ValueError("No validators provided")
 
@@ -165,8 +182,8 @@ def get_validator_seed_from_commit(config, commits):
     validator_seeds: dict[str, int] = {
         neuron.hotkey: commit.miner_seed
         for commit, neuron in commits
-        if getattr(commit, "expert_group", None) == config.moe.my_expert_group_id
-        and getattr(commit, "miner_seed", None) is not None
+        if isinstance(commit, ValidatorChainCommit)
+        and getattr(commit, "expert_group", None) == config.moe.my_expert_group_id
     }
     return validator_seeds
 

@@ -1,3 +1,4 @@
+import traceback
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from queue import Queue
@@ -5,7 +6,7 @@ from threading import Lock, Thread
 
 from mycelia.shared.app_logging import configure_logging, structlog
 from mycelia.shared.chain import MinerChainCommit, commit_status
-from mycelia.shared.checkpoint import delete_old_checkpoints, get_resume_info
+from mycelia.shared.checkpoint import ModelMeta, delete_old_checkpoints, get_resume_info
 from mycelia.shared.client import submit_model
 from mycelia.shared.config import MinerConfig, parse_args
 from mycelia.shared.cycle import search_model_submission_destination, setup_chain_worker, wait_till
@@ -64,7 +65,7 @@ def scheduler_service(
         commit_queue.put(Job(job_type=JobType.COMMIT, phase_end_block=phase_end_block))
 
         # --------- SUBMISSION SCHEDULING ---------
-        wait_till(config, phase_name=PhaseNames.submit, poll_fallback_seconds=poll_fallback_seconds)
+        wait_till(config, phase_name=PhaseNames.submission, poll_fallback_seconds=poll_fallback_seconds)
         submit_queue.put(Job(job_type=JobType.SUBMIT))
 
 
@@ -88,9 +89,7 @@ def download_worker(
                 current_model_hash = shared_state.current_model_hash
 
             download_meta = fetch_model_from_chain(
-                current_model_version,
-                current_model_hash,
-                config,
+                ModelMeta(global_ver=current_model_version, model_hash=current_model_hash), config, subtensor, wallet
             )
 
             if download_meta is None or "model_version" not in download_meta or "model_hash" not in download_meta:
@@ -106,9 +105,11 @@ def download_worker(
                 config.ckpt.validator_checkpoint_path,
                 config.ckpt.checkpoint_topk,
             )
+
         except Exception as e:
             # TODO: log/record failure, send alert, retry, etc.
-            print(f"[download_worker] Error while handling job: {e}")
+            logger.error(f"[download_worker] Error while handling job: {e}")
+            traceback.print_exc()
         finally:
             download_queue.task_done()
 
@@ -131,6 +132,9 @@ def commit_worker(
             with shared_state.lock:
                 shared_state.latest_checkpoint_path = latest_checkpoint_path
 
+            if latest_checkpoint_path is None:
+                logger.info("Not checkpoint found, skip commit.")
+
             model_path = (f"{latest_checkpoint_path}/model.pt",)
             model_hash = get_model_hash(model_path)
             commit_status(
@@ -144,7 +148,8 @@ def commit_worker(
 
         except Exception as e:
             # TODO: log/record failure, send alert, retry, etc.
-            print(f"[commit_worker] Error while handling job: {e}")
+            logger.error(f"[commit_worker] Error while handling job: {e}")
+            traceback.print_exc()
         finally:
             commit_queue.task_done()
 
@@ -165,6 +170,9 @@ def submit_worker(
             with shared_state.lock:
                 latest_checkpoint_path = shared_state.latest_checkpoint_path
 
+            if latest_checkpoint_path is None:
+                logger.info("Not checkpoint found, skip submission.")
+
             destination_axon = search_model_submission_destination(
                 wallet=wallet,
                 config=config,
@@ -181,33 +189,35 @@ def submit_worker(
             )
         except Exception as e:
             # TODO: log/record failure, send alert, retry, etc.
-            print(f"[submit_worker] Error while handling job: {e}")
+            logger.error(f"[submit_worker] Error while handling job: {e}")
+            traceback.print_exc()
         finally:
             submit_queue.task_done()
 
 
 # --- Wiring it all together ---
-def run_system(config, wallet, subtensor, current_model_version, current_model_hash):
+def run_system(config, wallet, subtensor, current_model_version: int = -1, current_model_hash: str = "xxx"):
     download_queue = Queue()
     commit_queue = Queue()
     submit_queue = Queue()
+    shared_state = SharedState(current_model_version, current_model_hash)
 
     # Start workers
     Thread(
         target=download_worker,
-        args=(config, download_queue, current_model_version, current_model_hash),
+        args=(config, download_queue, current_model_version, current_model_hash, shared_state),
         daemon=True,
     ).start()
 
     Thread(
         target=commit_worker,
-        args=(config, commit_queue, wallet, subtensor),
+        args=(config, commit_queue, wallet, subtensor, shared_state),
         daemon=True,
     ).start()
 
     Thread(
         target=submit_worker,
-        args=(config, submit_queue, wallet, subtensor),
+        args=(config, submit_queue, wallet, subtensor, shared_state),
         daemon=True,
     ).start()
 
@@ -215,6 +225,7 @@ def run_system(config, wallet, subtensor, current_model_version, current_model_h
     scheduler_service(
         config=config,
         download_queue=download_queue,
+        commit_queue=commit_queue,
         submit_queue=submit_queue,
     )
 

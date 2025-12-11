@@ -64,19 +64,19 @@ def start_model_from(
 
     # --- handling either miner / validator checkpoint not found ---
     if not secondary_ckpt_found:
-        logger.info("secondary checkpoint not found")
+        logger.info("secondary checkpoint not found", secondary_ckpt_path=secondary_ckpt_path)
         return primary_ckpt_found, primary_model_meta, latest_primary_ckpt
 
     if not primary_ckpt_found and latest_secondary_ckpt is not None:
-        logger.info("primary checkpoint not found")
-        return secondary_ckpt_found, secondary_model_meta, latest_secondary_ckpt / "model.pt"
+        logger.info("primary checkpoint not found", primary_ckpt_path=primary_ckpt_path)
+        return secondary_ckpt_found, secondary_model_meta, latest_secondary_ckpt
 
     # --- Return based on more updated version ---
     if secondary_model_meta >= primary_model_meta and latest_secondary_ckpt is not None:
         logger.info(
             f"secondary checkpoint version {secondary_model_meta} > primary checkpoint version {primary_model_meta}"
         )
-        return secondary_ckpt_found, secondary_model_meta, latest_secondary_ckpt / "model.pt"
+        return secondary_ckpt_found, secondary_model_meta, latest_secondary_ckpt
     else:
         logger.info(
             f"primary checkpoint version {primary_model_meta} > secondary checkpoint version {secondary_model_meta}"
@@ -120,7 +120,7 @@ def get_resume_info(
             logger.info(f"rank {rank}: No checkpoints found in {config.ckpt.checkpoint_path}")
             return False, ModelMeta(), None
 
-        latest_ckpt = ckpt_files[0]["filename"]
+        latest_ckpt = ckpt_files[0].path
         model_meta = ckpt_files[0]
         logger.info(f"rank {rank}: Latest checkpoint found in {latest_ckpt}")
         return True, model_meta, latest_ckpt
@@ -329,6 +329,20 @@ def load_optimizer(checkpoint_path, optimizer):
     optimizer.load_state_dict(_update_state_dict(optimizer.state_dict(), full_name_to_param))
 
 
+def get_model_files(checkpoint_path):
+    checkpoint_path = Path(checkpoint_path)  # normalize to Path object
+
+    # Case 1: checkpoint_path IS a .pt file
+    if checkpoint_path.is_file() and checkpoint_path.suffix == ".pt":
+        return fsspec.open_files(str(checkpoint_path), mode="rb")
+
+    # Case 2: checkpoint_path is a directory → match model*.pt inside it
+    pattern = str(checkpoint_path / "model*.pt")
+    files = fsspec.open_files(pattern, mode="rb")
+
+    return files
+
+
 def load_checkpoint(
     checkpoint_path: str,
     config: MinerConfig,
@@ -358,9 +372,10 @@ def load_checkpoint(
 
     if model is not None:
         full_state_dict = {}
-        model_files = fsspec.open_files(os.path.join(checkpoint_path, "model*.pt"), mode="rb")
-        model_files += fsspec.open_files(os.path.join(checkpoint_path, "model.pt"), mode="rb")
+        logger.info(f"A: {checkpoint_path}")
+        model_files = get_model_files(checkpoint_path)
         for f in model_files:
+            logger.info(f"F: {f}")
             with f as fh:
                 state_dict = torch.load(fh, map_location=torch.device("cpu"))
                 full_state_dict = full_state_dict | state_dict["model_state_dict"]
@@ -415,7 +430,7 @@ def get_sorted_checkpoints(checkpoint_path: str) -> dict[Path, ModelMeta]:
 
         # ensure both fields exist and are numeric
         model_meta = ModelMeta(
-            global_ver=int(meta.get("globalver") or None), inner_opt=int(meta.get("inneropt") or None), path=Path(f)
+            global_ver=int(meta.get("globalver") or -1), inner_opt=int(meta.get("inneropt") or -1), path=Path(f)
         )
         ckpt_files.append(model_meta)
 

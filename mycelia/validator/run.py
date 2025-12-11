@@ -3,7 +3,6 @@ import copy
 import gc
 import os
 import secrets
-import time
 from typing import Any
 
 import bittensor
@@ -23,7 +22,7 @@ from mycelia.shared.checkpoint import (
     save_checkpoint,
 )
 from mycelia.shared.config import ValidatorConfig, parse_args
-from mycelia.shared.cycle import gather_validation_job, get_combined_validator_seed, should_act
+from mycelia.shared.cycle import gather_validation_job, get_combined_validator_seed, wait_till
 from mycelia.shared.dataloader import get_dataloader
 from mycelia.shared.evaluate import evaluate_model
 from mycelia.shared.expert_manager import (
@@ -31,7 +30,7 @@ from mycelia.shared.expert_manager import (
     get_weight_sum,
     populate_global_grads_from_local,
 )
-from mycelia.shared.helper import get_nested_attr
+from mycelia.shared.helper import get_model_hash, get_nested_attr
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import load_model
 from mycelia.shared.modeling.mycelia import get_base_tokenizer
@@ -169,6 +168,7 @@ def sync_grad_across_validators(
             logger.info("skip averager", group_id=group_id, mode=avg.mode, total_size=avg.total_size)
             continue
 
+        logger.info("begin sync grad across validator", group=group_id, mode=avg.mode)
         pack_grads(group_grad_buff_meta[group_id])
         info = avg.step(allow_retries=False)
         unpack_to_grads(group_grad_buff_meta[group_id])
@@ -176,6 +176,8 @@ def sync_grad_across_validators(
         logger.info(
             "sync grad across validator", group=group_id, mode=avg.mode, successes=("averaged" if info else "no group")
         )
+
+    return
 
 
 def run_global_optimization(
@@ -299,7 +301,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
             model_hash="xxx",
             model_version=global_opt_step,
             expert_group=1,
-            miner_seed=secrets.randbits(24),  # this should reveal later
+            miner_seed=0,  # this should reveal later
         ),
     )
 
@@ -311,27 +313,43 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
 
     outer_optimizer.zero_grad()
 
+    current_model_hash = "xxx"
+
     try:
         while True:
             # for each step, we run 1 backward
             # for each inner_opt_step, we run local optimization; gradient_accumulation_steps = 1 real step
             # for each global_opt_interval number of inner_opt_step, we synchronise weight from different ddp worker, and then run global optimization
 
-            # === Wait till next period ===
-            should_start = False
-            while not should_start:
-                should_start, block_till = should_act(config, PhaseNames.validate)
-                logger.info("(0) Checking for start", should_start=should_start, block_till=block_till)
-                if block_till > 0:
-                    time.sleep((block_till) * 12)
+            # === Wait till commit phase to submit random seed ===
+            _, phase_end_block = wait_till(config, PhaseNames.commit)
+            logger.info("(0) Commit new seed for next validation")
+
+            commit_status(
+                config,
+                wallet,
+                subtensor,
+                ValidatorChainCommit(
+                    model_hash=current_model_hash,
+                    model_version=global_opt_step,
+                    expert_group=1,
+                    miner_seed=secrets.randbits(24),  # this should reveal later
+                    encrypt=True,
+                    n_block=subtensor.block - phase_end_block,
+                ),
+            )
+
+            # === Wait till validation phase to start the validation procedure ===
+            wait_till(config, PhaseNames.validate)
+            logger.info("(1) Start validation pahse")
 
             # === Get miner ===
-            logger.info("(1) Gathering miner job")
+            logger.info("(2) Gathering miner job")
             miner_jobs = gather_validation_job(config, subtensor, step=global_opt_step)
             logger.info("miner job(s)", global_opt_step=global_opt_step, miner_jobs=miner_jobs)
 
             # === Get miner model and evaluate the miners ===
-            logger.info("(2) Evaluating miners")
+            logger.info("(3) Evaluating miners")
             asyncio.run(
                 run_evaluation(
                     config=config,
@@ -348,7 +366,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
             logger.info("eval result", scores=score_aggregator.uid_score_pairs())
 
             # === aggragate miner gradient change locally ===
-            logger.info("(3) Aggregating miner gradient change")
+            logger.info("(4) Aggregating miner gradient change")
             asyncio.run(
                 aggregate_miner_gradient_change(
                     base_model=base_model,
@@ -361,12 +379,13 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 )
             )
 
-            # === aggragate miner gradient change ===
-            logger.info("(4) Syncing gradient across validators")
+            # === wait till merging phase and aggragate miner gradient change ===
+            wait_till(config, PhaseNames.merge)
+            logger.info("(5) Syncing gradient across validators")
             sync_grad_across_validators(group_averagers, group_grad_buff_meta)
 
             # === global optimizer ===
-            logger.info("(5) Running global model optimisation step")
+            logger.info("(6) Running global model optimisation step")
             run_global_optimization(
                 model=base_model,
                 global_model=global_model,
@@ -377,8 +396,45 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 score_aggregator=score_aggregator,
             )
 
+            # === save checkpoint ===
+            logger.info("(7) Saving checkpoint")
+            ckpt_path = os.path.join(config.ckpt.checkpoint_path, f"globalopt_{int(global_opt_step)}")
+
+            save_checkpoint(
+                checkpoint_path=ckpt_path,
+                model=base_model,
+                outer_optimizer=outer_optimizer,
+                loss=loss_batch.item(),
+                outer_scaler=outer_scaler,
+                data_loader=train_dataloader,
+                save_global_state=rank == 0,
+                rank=rank,
+                expert_manager=expert_manager,
+                save_model_by_expert_group=True,
+            )
+
+            # === Comit to chain for new model ===
+            current_model_hash = get_model_hash(ckpt_path / "model.pt")
+            commit_status(
+                config,
+                wallet,
+                subtensor,
+                ValidatorChainCommit(
+                    model_hash=current_model_hash,
+                    model_version=global_opt_step,
+                    expert_group=1,
+                    miner_seed=0,
+                ),
+            )
+
+            if rank == 0:
+                if config.ckpt.checkpoint_topk is not None:
+                    ckpt_deleted = delete_old_checkpoints(config.ckpt.checkpoint_path, config.ckpt.checkpoint_topk)
+                    if ckpt_deleted:
+                        logger.info(f"Deleted old checkpoints: {ckpt_deleted}")
+
             # === validation and log metric ===
-            logger.info("(6) Start local evaluation")
+            logger.info("(8) Start local evaluation")
             val_metric = evaluate_model(
                 rank=rank, step=global_opt_step, model=global_model, eval_dataloader=eval_dataloader, device=device
             )
@@ -400,49 +456,11 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
 
             metric_logger.log(metrics)
 
-            # === save checkpoint ===
-            logger.info("(7) Saving checkpoint")
-            ckpt_path = os.path.join(config.ckpt.checkpoint_path, f"globalopt_{int(global_opt_step)}")
-
-            save_checkpoint(
-                checkpoint_path=ckpt_path,
-                model=base_model,
-                outer_optimizer=outer_optimizer,
-                loss=loss_batch.item(),
-                outer_scaler=outer_scaler,
-                data_loader=train_dataloader,
-                save_global_state=rank == 0,
-                rank=rank,
-                expert_manager=expert_manager,
-                save_model_by_expert_group=True,
-            )
-
-            # === Comit to chain for new model ===
-            commit_status(
-                config,
-                wallet,
-                subtensor,
-                ValidatorChainCommit(
-                    model_hash="xxx",
-                    model_version=global_opt_step,
-                    expert_group=1,
-                    miner_seed=secrets.randbits(24),  # this should reveal later
-                ),
-            )
-
-            if rank == 0:
-                if config.ckpt.checkpoint_topk is not None:
-                    ckpt_deleted = delete_old_checkpoints(config.ckpt.checkpoint_path, config.ckpt.checkpoint_topk)
-                    if ckpt_deleted:
-                        logger.info(f"Deleted old checkpoints: {ckpt_deleted}")
-
             # # === Clean up ===
             # loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
             # aux_loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
             # gc.collect()
             # torch.cuda.empty_cache()%
-
-            time.sleep(60)
 
             global_opt_step += 1
 

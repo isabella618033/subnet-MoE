@@ -38,7 +38,7 @@ class ValidatorChainCommit(BaseModel):
     model_hash: str | None = None
     model_version: int | None = None
     expert_group: int | None = None  # block
-    seed: int | None = None
+    miner_seed: int | None = None
 
 
 class MinerChainCommit(BaseModel):
@@ -101,10 +101,11 @@ def get_chain_commits(
         try:
             chain_commit = (
                 ValidatorChainCommit.model_validate(status_dict)
-                if "seed" in status_dict
+                if "miner_seed" in status_dict
                 else MinerChainCommit.model_validate(status_dict)
             )
-        except Exception:
+
+        except Exception as e:
             chain_commit = None
 
         parsed.append((chain_commit, metagraph.neurons[uid]))
@@ -151,10 +152,18 @@ def scan_chain_for_new_model(
 
     max_model_version = max([getattr(c, "model_version", 0) for c, n in commits])
     if current_model_meta is not None:
+        logger.info("check model ver", max_model_version, current_model_meta.global_ver)
         max_model_version = max(max_model_version, current_model_meta.global_ver)
+
+    # 0) Download only from validator
+    commits = [(c, n) for c, n in commits if n.validator_permit]
+    commits = [c for c in commits if getattr(c, "model_hash", False)]
 
     # 1) collect candidates that are newer than the current version
     most_updated_commits = [(c, n) for c, n in commits if getattr(c, "model_version", 0) >= max_model_version]
+
+    if len(most_updated_commits) == 0:
+        return False, []
 
     # 2) majority filter by model_hash among the newer candidates
     hash_counts = Counter([c.model_hash for c, n in most_updated_commits if getattr(c, "model_hash", False)])
@@ -168,16 +177,22 @@ def scan_chain_for_new_model(
     download_meta = []
     for commit, neuron in filtered_commits:
         # Only include entries with reachable metadata
-        download_meta.append(
-            {
-                "uid": neuron.uid,
-                "ip": neuron.axon_info.ip,
-                "port": neuron.axon_info.port,
-                "model_hash": commit.model_hash,
-                "model_version": commit.model_version,
-                "target_hotkey_ss58": neuron.hotkey,
-            }
-        )
+        try:
+            download_meta.append(
+                {
+                    "uid": neuron.uid,
+                    "ip": neuron.axon_info.ip,
+                    "port": neuron.axon_info.port,
+                    "model_hash": commit.model_hash,
+                    "model_version": commit.model_version,
+                    "target_hotkey_ss58": neuron.hotkey,
+                }
+            )
+
+            logger.info("Append commit", commit=commit)
+
+        except Exception:
+            logger.info("Cannot append commit", commit=commit)
 
     # should_download if there is at least one newer entry agreeing on a majority hash
     should_download = len(download_meta) > 0

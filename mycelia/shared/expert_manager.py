@@ -233,7 +233,7 @@ def get_layer_expert_id(layer_name: str) -> tuple[int | None, int | None]:
     "model.layers.3.mlp.experts.7.w1.weight" -> (3, 7)
     "model.layers.5.mlp.gate.weight"         -> (5, None)
     """
-    m = re.search(r"model\.layers\.(\d+)(?:\.mlp\.experts\.(\d+))?", layer_name)
+    m = re.search(r"layers\.(\d+)(?:\.mlp\.experts\.(\d+))?", layer_name)
     if not m:
         return None, None
     layer_id = int(m.group(1))

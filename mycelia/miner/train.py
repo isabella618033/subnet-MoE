@@ -30,7 +30,7 @@ from mycelia.shared.config import MinerConfig, parse_args
 from mycelia.shared.dataloader import get_dataloader
 from mycelia.shared.evaluate import evaluate_model
 from mycelia.shared.expert_manager import ExpertManager
-from mycelia.shared.helper import *
+from mycelia.shared.helper import get_nested_attr
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import load_model
 from mycelia.shared.modeling.mycelia import get_base_tokenizer
@@ -142,7 +142,7 @@ def setup_training(
 
     # === model & Experts manager ===
     expert_manager = ExpertManager(config)
-    model, model_meta = load_model(rank, config, expert_manager)
+    model, model_meta = load_model(rank, config, expert_manager, subtensor, wallet)
     model = model.to(device)
     global_model = copy.deepcopy(model).cpu()
 
@@ -271,23 +271,9 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
             # for each inner_opt_step, we run local optimization; gradient_accumulation_steps = 1 real step
             # for each global_opt_interval number of inner_opt_step, we synchronise weight from different ddp worker, and then run global optimization
 
-            def logp(
-                msg: str, loss_batch: torch.Tensor | None = None, aux_loss_batch: torch.Tensor | None = None
-            ) -> None:
-                if aux_loss_batch is not None:
-                    msg = f"aux loss_batch {aux_loss_batch:.4f} | {msg}"
-
-                if loss_batch is not None:
-                    if aux_loss_batch is not None:
-                        msg = f"loss_batch {loss_batch-aux_loss_batch:.4f} | {msg}"
-                    else:
-                        msg = f"loss_batch {loss_batch:.4f} | {msg}"
-
-                logger.info(f"rank {rank} | step {step} | inner {inner_opt_step} | {msg}")
-
             inner_opt_step = step // config.local_par.gradient_accumulation_steps
             is_inner_optimizer_step = step % config.local_par.gradient_accumulation_steps == 0
-            is_start_step = step == current_model_version.inner_opt * config.local_par.gradient_accumulation_steps
+            is_start_step = step == current_model_meta.inner_opt * config.local_par.gradient_accumulation_steps
 
             # === Training and inner optimization ===
             if (
@@ -318,7 +304,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
                 # === inner optimizer ===
                 if is_inner_optimizer_step:
-                    logp("inner opt step", loss_batch, aux_loss_batch)
+                    logger.info("inner opt step", loss_batch, aux_loss_batch)
 
                     for p in model.parameters():
                         if p.grad is None:
@@ -347,7 +333,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 is_inner_optimizer_step
                 and inner_opt_step % max(round(config.local_par.global_opt_interval * 0.02), 1) == 0
             ):
-                logp("optimizer step", loss_batch, aux_loss_batch)
+                logger.info("optimizer step", loss_batch, aux_loss_batch)
                 metrics = get_status(
                     config=config,
                     model=model,
@@ -363,16 +349,16 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
             # === local validation and log metric ===
             if is_inner_optimizer_step and inner_opt_step % config.log.metric_interval == 0:
-                logp("reached barrier, waiting for partial evaluation")
+                logger.info("reached barrier, waiting for partial evaluation")
                 dist.barrier(device_ids=[rank])
 
-                logp("start partial evaluation")
+                logger.info("start partial evaluation")
 
                 val_metric = evaluate_model(
                     rank=rank, step=inner_opt_step, model=model, eval_dataloader=eval_dataloader, device=device
                 )
 
-                logp(f"evaluation before log {val_metric}")
+                logger.info(f"evaluation before log {val_metric}")
                 metrics = (
                     get_status(
                         config=config,
@@ -390,7 +376,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
                 metric_logger.log(metrics)
 
-                logp("reached barrier, waiting for partial validation and metric logging to complete")
+                logger.info("reached barrier, waiting for partial validation and metric logging to complete")
                 dist.barrier(device_ids=[rank])
 
             # === save checkpoint ===
@@ -399,7 +385,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 and config.ckpt.checkpoint_interval is not None
                 and inner_opt_step % config.ckpt.checkpoint_interval == 0
             ):
-                logp("saving checkpoint")
+                logger.info("saving checkpoint")
                 ckpt_path = os.path.join(
                     config.ckpt.checkpoint_path, f"globalver_{current_model_meta.global_ver}_inneropt_{inner_opt_step}"
                 )
@@ -422,9 +408,9 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     if config.ckpt.checkpoint_topk is not None:
                         ckpt_deleted = delete_old_checkpoints(config.ckpt.checkpoint_path, config.ckpt.checkpoint_topk)
                         if ckpt_deleted:
-                            logp(f"Deleted old checkpoints: {ckpt_deleted}")
+                            logger.info(f"Deleted old checkpoints: {ckpt_deleted}")
 
-                logp("reached barrier, waiting for complete checkpoint saving")
+                logger.info("reached barrier, waiting for complete checkpoint saving")
                 dist.barrier(device_ids=[rank])
 
             # === reload model ===
@@ -436,12 +422,12 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     primary_ckpt_path=config.ckpt.validator_checkpoint_path,
                     secondary_ckpt_path=config.ckpt.checkpoint_path,
                 )[1]
-                == current_model_version
+                == current_model_meta
             ):
                 dist.barrier(device_ids=[rank])  # make sure everything is saved and everyone is ready to load
-                logp("freeing cuda memory")
+                logger.info("freeing cuda memory")
                 free_cuda_models(models=[model, global_model], optimizers=[inner_optimizer], devices=[device])
-                logp("restarting model")
+                logger.info("restarting model")
                 (
                     model,
                     global_model,

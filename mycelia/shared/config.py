@@ -226,6 +226,34 @@ class WorkerConfig(BaseConfig):
     # Derivations & hygiene
     # -----------------------
 
+    @classmethod
+    def create(cls, **data):
+        self = cls(**data)  # calls __init__
+        return self._post_init()
+
+    def _post_init(self):
+        # If an existing config exists, bump run_name when the configs don't match.
+        config_path = os.path.join(self.ckpt.checkpoint_path, "config.yaml")
+
+        while os.path.exists(config_path):
+            logger.info(f"found existing config path {config_path}")
+            with open(config_path, encoding="utf-8") as f:
+                existing_config_dict = yaml.safe_load(f)
+
+            new_self = self.bump_run_name_if_diff(existing_config_dict)
+
+            if new_self is self:
+                # No overwrite; bump done or same config
+                return self
+
+            # Overwrite happened → new instance returned
+            self = new_self
+
+            # Update path and continue loop
+            config_path = os.path.join(self.ckpt.checkpoint_path, "config.yaml")
+
+        return self
+
     def __init__(self, **data):
         """
         Initialize, validate derived fields, and auto-bump `run_name` if an on-disk
@@ -240,21 +268,6 @@ class WorkerConfig(BaseConfig):
 
         # get task specific config
         self.update_by_task()
-
-        # If an existing config exists, bump run_name when the configs don't match.
-        config_path = os.path.join(self.ckpt.checkpoint_path, "config.yaml")
-        while os.path.exists(config_path):
-            logger.info(f"found existing config path {config_path}")
-            with open(config_path, encoding="utf-8") as f:
-                existing_config_dict = yaml.safe_load(f)
-
-            bumped = self.bump_run_name_if_diff(existing_config_dict)
-
-            if not bumped:  # landed on the same config
-                return
-            else:
-                # bumped so need to check on the config at the new folder
-                config_path = os.path.join(self.ckpt.checkpoint_path, "config.yaml")
 
         # === create checkpoint directory ===
         os.makedirs(self.task.base_path, exist_ok=True)
@@ -372,11 +385,25 @@ class WorkerConfig(BaseConfig):
             True if bumped, False if configs were the same.
         """
         if self.same_as(other):
-            return False
+            return self
+
+        choice = (
+            input(f"Configurations differ from an existing run. " f"Overwrite '{self.run.run_name}'? (y/n): ")
+            .strip()
+            .lower()
+        )
+
+        if choice in {"y", "yes"}:
+            logger.info("Overwriting existing run_name.")
+            return WorkerConfig(**other)
+
+        else:
+            logger.info("User declined to overwrite existing run_name.")
+
         self.run.run_name = self._bump_run_name(self.run.run_name)
         self._refresh_paths()
         logger.info(f"Bumped run_name to {self.run.run_name} due to config differences.")
-        return True
+        return self
 
     # ---- Get config based on task ----
     def update_by_task(self, expert_group_name: str | None = None):
