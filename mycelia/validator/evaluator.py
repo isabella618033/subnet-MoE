@@ -24,7 +24,7 @@ class MinerEvalJob:
 
 # -------------------------- Pipeline Config -----------------------------------
 MAX_CONCURRENT_DOWNLOADS = 4
-EVAL_WORKERS = 2
+EVAL_WORKERS = 1
 DOWNLOAD_TIMEOUT_SEC = 60
 EVAL_MAX_BATCHES = 50
 # ------------------------------------------------------------------------------
@@ -48,6 +48,8 @@ async def evaluator_worker(
     max_eval_batches: int = EVAL_MAX_BATCHES,
     rank: int | None = None,
 ):
+    import gc
+
     while True:
         job = await jobs_q.get()
         if job is None:  # type: ignore
@@ -56,18 +58,35 @@ async def evaluator_worker(
             break
 
         try:
+            # Clear memory before loading
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            logger.info(f"{name}: Evaluating uid={job.uid}")
+
             # Load model (potentially blocking) in a thread
             model = await asyncio.to_thread(load_model_from_path, job.model_path, base_model, device)
             eval_dataloader = await asyncio.to_thread(get_dataloader, config, tokenizer, combinded_seed, 0, 10)
-            metrics = await asyncio.to_thread(
-                evaluate_model, job.step, model, eval_dataloader, device, max_eval_batches, rank
-            )
+
+            with torch.inference_mode():
+                metrics = await asyncio.to_thread(
+                    evaluate_model, job.step, model, eval_dataloader, device, max_eval_batches, rank
+                )
+
             # choose a primary score (here 'accuracy'); adjust if your evaluate_model returns other keys
             score = float(metrics.get("val_loss", 100))
             aggregator.add_score(job.uid, job.hotkey, score)
-            logger.info(f"{name}: uid={job.uid} score={score:.4f}z path={job.model_path}")
+            logger.info(f"{name}: uid={job.uid} score={score:.4f}")
 
-            del eval_dataloader
+            # Explicit cleanup
+            del eval_dataloader, model
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        except torch.cuda.OutOfMemoryError as e:
+            logger.error(f"{name}: OOM for uid={job.uid}")
+            gc.collect()
+            torch.cuda.empty_cache()
 
         except Exception as e:
             logger.exception(f"{name}: Evaluation failed for uid={job.uid}: {e}")

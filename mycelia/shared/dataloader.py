@@ -184,6 +184,6 @@ def get_dataloader(
         tokenised_dataset,  # split
         collate_fn=data_collator,
         batch_size=config.task.data.per_device_train_batch_size,
-        num_workers=4,  # tune based on CPU/disk throughput
+        num_workers=1,  # tune based on CPU/disk throughput
     )
     return loader

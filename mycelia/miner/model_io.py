@@ -6,7 +6,12 @@ from threading import Lock, Thread
 
 from mycelia.shared.app_logging import configure_logging, structlog
 from mycelia.shared.chain import MinerChainCommit, commit_status
-from mycelia.shared.checkpoint import ModelMeta, delete_old_checkpoints, get_resume_info
+from mycelia.shared.checkpoint import (
+    ModelMeta,
+    complile_full_state_dict_from_path,
+    delete_old_checkpoints,
+    get_resume_info,
+)
 from mycelia.shared.client import submit_model
 from mycelia.shared.config import MinerConfig, parse_args
 from mycelia.shared.cycle import search_model_submission_destination, setup_chain_worker, wait_till
@@ -40,6 +45,10 @@ class SharedState:
     current_model_hash: str | None = None
     latest_checkpoint_path: str | None = None
     lock: Lock = field(default_factory=Lock, repr=False)
+
+
+class FileNotReadyError(RuntimeError):
+    pass
 
 
 # --- Scheduler service ---
@@ -92,9 +101,12 @@ def download_worker(
                 ModelMeta(global_ver=current_model_version, model_hash=current_model_hash), config, subtensor, wallet
             )
 
-            if download_meta is None or "model_version" not in download_meta or "model_hash" not in download_meta:
-                msg = f"[download_worker] Invalid download_meta received: {download_meta}"
-                raise ValueError(msg)
+            if (
+                not isinstance(download_meta, dict)
+                or "model_version" not in download_meta
+                or "model_hash" not in download_meta
+            ):
+                raise FileNotReadyError(f"download_meta from chain is not ready/invalid: {download_meta}")
 
             # Update shared state with new version/hash
             with shared_state.lock:
@@ -106,10 +118,13 @@ def download_worker(
                 config.ckpt.checkpoint_topk,
             )
 
+        except FileNotReadyError as e:
+            logger.warning(f"[download_worker] File not ready error: {e}")
+
         except Exception as e:
-            # TODO: log/record failure, send alert, retry, etc.
             logger.error(f"[download_worker] Error while handling job: {e}")
             traceback.print_exc()
+
         finally:
             download_queue.task_done()
 
@@ -133,10 +148,10 @@ def commit_worker(
                 shared_state.latest_checkpoint_path = latest_checkpoint_path
 
             if latest_checkpoint_path is None:
-                logger.info("Not checkpoint found, skip commit.")
+                raise FileNotReadyError("Not checkpoint found, skip commit.")
 
             model_path = (f"{latest_checkpoint_path}/model.pt",)
-            model_hash = get_model_hash(model_path)
+            model_hash = get_model_hash(complile_full_state_dict_from_path(model_path))
             commit_status(
                 config,
                 wallet,
@@ -146,10 +161,13 @@ def commit_worker(
                 n_blocks=job.phase_end_block - subtensor.block,
             )
 
+        except FileNotReadyError as e:
+            logger.warning(f"[submit_worker] File not ready error: {e}")
+
         except Exception as e:
-            # TODO: log/record failure, send alert, retry, etc.
             logger.error(f"[commit_worker] Error while handling job: {e}")
             traceback.print_exc()
+
         finally:
             commit_queue.task_done()
 
@@ -166,12 +184,14 @@ def submit_worker(
     """
     while True:
         job = submit_queue.get()
+        logger = logger.bind(prefix="[submit_worker]")
+
         try:
             with shared_state.lock:
                 latest_checkpoint_path = shared_state.latest_checkpoint_path
 
             if latest_checkpoint_path is None:
-                logger.info("Not checkpoint found, skip submission.")
+                raise FileNotReadyError("Not checkpoint found, skip submission.")
 
             destination_axon = search_model_submission_destination(
                 wallet=wallet,
@@ -187,10 +207,14 @@ def submit_worker(
                 block=subtensor.block,
                 model_path=f"{latest_checkpoint_path}/model.pt",
             )
+
+        except FileNotReadyError as e:
+            logger.warning(f"[submit_worker] File not ready error: {e}")
+
         except Exception as e:
-            # TODO: log/record failure, send alert, retry, etc.
             logger.error(f"[submit_worker] Error while handling job: {e}")
             traceback.print_exc()
+
         finally:
             submit_queue.task_done()
 

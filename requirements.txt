@@ -17,6 +17,12 @@ accelerate==1.0.0
 datasets==3.0.0
 bitsandbytes==0.43.1; platform_system == "Linux"
 
+# Unsloth for optimized 4-bit inference (CUDA 12.x for A6000)
+unsloth[cu124-ampere-torch240] @ git+https://github.com/unslothai/unsloth.git; platform_system == "Linux"
+
+# TRL for potential GRPO/RLHF support
+trl>=0.11.0
+
 # -----------------------------
 # API / server (for validator, optional)
 # -----------------------------

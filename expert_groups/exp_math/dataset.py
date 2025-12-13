@@ -77,7 +77,6 @@ class StreamingTorchDataset(DefaultStreamingTorchDataset):
             max_length=sequence_length,
             padding="max_length",
             add_special_tokens=False,
-            return_tensors="pt",
         )
 
         return {

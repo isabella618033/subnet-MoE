@@ -109,7 +109,6 @@ def build_grad_buff_from_model(
     all_named = list(iter_named_grads(model))
     all_named.sort(key=lambda kv: kv[0])  # deterministic order
     name_to_tensor = dict(all_named)
-    logger.info(expert_group_assignment=expert_group_assignment)
     expert_group_to_names = {group_id: [] for group_id in list(expert_group_assignment.keys())}
 
     for name, _ in name_to_tensor.items():

@@ -109,13 +109,11 @@ def h256_int(*parts: Any) -> int:
     return int.from_bytes(m.digest(), "big")
 
 
-def serialize_torch_model_path(model_path: str) -> bytes:
+def serialize_torch_model_path(state) -> bytes:
     """
     Load a torch model from disk and serialize its state_dict
     deterministically into raw bytes.
     """
-    state = torch.load(model_path, map_location="cpu")
-
     # If it's a full model, extract state_dict
     if isinstance(state, torch.nn.Module):
         state = state.state_dict()
@@ -137,12 +135,12 @@ def hash_model_bytes(model_bytes: bytes) -> bytes:
     return hashlib.blake2b(model_bytes, digest_size=32).digest()
 
 
-def get_model_hash(model_path: str | Path):
+def get_model_hash(state):
     """
     Create a model hash from model mocated at specified path.
     """
     # 1. Serialize model → bytes
-    model_bytes = serialize_torch_model_path(model_path)
+    model_bytes = serialize_torch_model_path(state)
 
     # 2. Hash model to 32 bytes
     model_hash = hash_model_bytes(model_bytes)

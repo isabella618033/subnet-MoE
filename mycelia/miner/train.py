@@ -254,6 +254,8 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
         current_model_meta,
     ) = setup_training(config, rank, device, tokenizer, subtensor, wallet, current_model_meta=None)
 
+    logger.info("setup training model", model)
+    logger.info("setup training dataloader", train_dataloader)
     # === training ===
     loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
     aux_loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
@@ -289,8 +291,10 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     batch_device[key] = batch[key].to(device)
 
                 with torch.amp.autocast("cuda", dtype=torch.float16):
+                    logger.info("batch device keys", batch_device.keys())
                     outputs = model(**batch_device)
 
+                    logger.info("model output", outputs)
                     loss = outputs.loss / config.local_par.gradient_accumulation_steps
                     # aux_loss = outputs.aux_loss / config.local_par.gradient_accumulation_steps if outputs.aux_loss is not None else torch.tensor(0)
                     aux_loss = torch.tensor(0)

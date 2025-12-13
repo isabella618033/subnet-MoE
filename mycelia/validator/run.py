@@ -17,6 +17,7 @@ from mycelia.shared.app_logging import configure_logging, structlog
 from mycelia.shared.chain import ValidatorChainCommit, commit_status, setup_chain_worker
 from mycelia.shared.checkpoint import (
     ModelMeta,
+    complile_full_state_dict_from_path,
     delete_old_checkpoints,
     load_checkpoint,
     save_checkpoint,
@@ -91,8 +92,8 @@ def setup_training(
     logger.info(f"rank {rank} setup training - load model and expert manager")
     expert_manager = ExpertManager(config)
     base_model, model_meta = load_model(rank, config, expert_manager, subtensor, wallet, current_model_meta)
-    base_model = base_model.to(device)
-    global_model = copy.deepcopy(base_model).cpu()
+    base_model = base_model.cpu()
+    global_model = copy.deepcopy(base_model)
 
     # === optimizers ===
     logger.info(f"rank {rank} setup training - load optimizer")
@@ -354,14 +355,17 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 run_evaluation(
                     config=config,
                     step=global_opt_step,
-                    device=base_model.device,
+                    device=device,
                     miners=miner_jobs,
                     score_aggregator=score_aggregator,
-                    base_model=base_model,
+                    base_model=copy.deepcopy(base_model).to(device),
                     tokenizer=tokenizer,
                     combinded_seed=get_combined_validator_seed(config, subtensor),
                 )
             )
+
+            gc.collect()
+            torch.cuda.empty_cache()
 
             logger.info("eval result", scores=score_aggregator.uid_score_pairs())
 
@@ -382,13 +386,13 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
             # === wait till merging phase and aggragate miner gradient change ===
             wait_till(config, PhaseNames.merge)
             logger.info("(5) Syncing gradient across validators")
-            sync_grad_across_validators(group_averagers, group_grad_buff_meta)
+            sync_grad_across_validators(group_averagers=group_averagers, group_grad_buff_meta=group_grad_buff_meta)
 
             # === global optimizer ===
-            logger.info("(6) Running global model optimisation step")
+            logger.info("(6) Running global model optimization step")
             run_global_optimization(
                 model=base_model,
-                global_model=global_model,
+                global_model=global_model.to(device),
                 device=device,
                 rank=rank,
                 outer_optimizer=outer_optimizer,
@@ -396,9 +400,13 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 score_aggregator=score_aggregator,
             )
 
+            global_model.to("cpu")
+            gc.collect()
+            torch.cuda.empty_cache()
+
             # === save checkpoint ===
             logger.info("(7) Saving checkpoint")
-            ckpt_path = os.path.join(config.ckpt.checkpoint_path, f"globalopt_{int(global_opt_step)}")
+            ckpt_path = config.ckpt.checkpoint_path / f"globalopt_{int(global_opt_step)}"
 
             save_checkpoint(
                 checkpoint_path=ckpt_path,
@@ -414,7 +422,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
             )
 
             # === Comit to chain for new model ===
-            current_model_hash = get_model_hash(ckpt_path / "model.pt")
+            current_model_hash = get_model_hash(complile_full_state_dict_from_path(ckpt_path))
             commit_status(
                 config,
                 wallet,

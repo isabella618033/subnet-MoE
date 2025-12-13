@@ -11,6 +11,7 @@ from transformers.models.qwen3_next.modeling_qwen3_next import (
     OutputRecorder,
     Qwen3NextAttention,
     Qwen3NextDecoderLayer,
+    Qwen3NextForCausalLM,
     Qwen3NextMLP,
     Qwen3NextModel,
     Qwen3NextPreTrainedModel,
@@ -173,6 +174,12 @@ class CustomQwen3NextModel(Qwen3NextModel):
     def __init__(self, config: Qwen3NextConfig):
         super().__init__(config)
         self.layers = nn.ModuleList([DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
+
+
+class CustomQwen3NextForCausalLM(Qwen3NextForCausalLM):
+    def __init__(self, config):
+        super().__init__(config)
+        self.model = CustomQwen3NextModel(config)
 
 
 def get_moe_model_config(

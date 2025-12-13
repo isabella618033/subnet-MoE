@@ -4,6 +4,7 @@ from pathlib import Path
 import bittensor as bt
 from substrateinterface import Keypair
 
+from mycelia.shared.checkpoint import complile_full_state_dict_from_path
 from mycelia.shared.helper import get_model_hash
 
 
@@ -38,7 +39,7 @@ def construct_model_message(model_path: str | Path, target_hotkey_ss58: str, blo
         model_hash(32 bytes) || construct_block_message(...)
     """
     # 1. Get model hash
-    model_hash = get_model_hash(model_path)
+    model_hash = get_model_hash(complile_full_state_dict_from_path(model_path))
 
     # 2. Create pubkey || block message
     block_msg = construct_block_message(target_hotkey_ss58, block)

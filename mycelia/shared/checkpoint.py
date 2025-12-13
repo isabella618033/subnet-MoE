@@ -177,9 +177,9 @@ def save_state_dict_by_expert_group(
     # Save the groups
     paths = {}
     for gid, sd in grouped_state.items():
-        fname = f"model_expgroup_{gid}.pt" if gid != "shared" else "shared.pt"
+        fname = f"model_expgroup_{gid}.pt" if gid != "shared" else "model_shared.pt"
         path = os.path.join(save_dir, fname)
-        torch.save({"state_dict": sd}, path)
+        torch.save({"model_state_dict": sd}, path)
         paths[gid] = path
 
     return paths
@@ -275,10 +275,6 @@ def save_checkpoint(
 
     logger.info(f"Checkpoint saved to {checkpoint_path}")
 
-    del checkpoint
-    del opt_checkpoint
-    del global_state_dict
-
 
 def load_optimizer(checkpoint_path, optimizer):
     def _get_name_to_id(optimizer_state_dict):
@@ -343,6 +339,19 @@ def get_model_files(checkpoint_path):
     return files
 
 
+def complile_full_state_dict_from_path(checkpoint_path):
+    full_state_dict = {}
+    model_files = get_model_files(checkpoint_path)
+    for f in model_files:
+        with f as fh:
+            state_dict = torch.load(fh, map_location=torch.device("cpu"))
+            logger.info("load checkpoint state dict", state_dict.keys())
+            full_state_dict = full_state_dict | state_dict["model_state_dict"]
+            logger.info(f"loaded checkpoint {f} loss {state_dict['loss'] if 'loss' in state_dict else -1 :.5f}")
+
+    return full_state_dict
+
+
 def load_checkpoint(
     checkpoint_path: str,
     config: MinerConfig,
@@ -371,15 +380,7 @@ def load_checkpoint(
     """
 
     if model is not None:
-        full_state_dict = {}
-        logger.info(f"A: {checkpoint_path}")
-        model_files = get_model_files(checkpoint_path)
-        for f in model_files:
-            logger.info(f"F: {f}")
-            with f as fh:
-                state_dict = torch.load(fh, map_location=torch.device("cpu"))
-                full_state_dict = full_state_dict | state_dict["model_state_dict"]
-                logger.info(f"rank {rank}: loaded checkpoint {f} loss {state_dict['loss']:.5f}")
+        full_state_dict = complile_full_state_dict_from_path(checkpoint_path)
 
         model.load_state_dict(full_state_dict, strict=True)
         model.to(device)
