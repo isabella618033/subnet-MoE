@@ -444,7 +444,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
             # === validation and log metric ===
             logger.info("(8) Start local evaluation")
             val_metric = evaluate_model(
-                rank=rank, step=global_opt_step, model=global_model, eval_dataloader=eval_dataloader, device=device
+                rank=rank, step=global_opt_step, model=global_model.to(device), eval_dataloader=eval_dataloader, device=device
             )
 
             metrics = (

@@ -76,17 +76,6 @@ def init_process(local_rank: int, config: MinerConfig, world_size: int, fn: call
     fn(local_rank, world_size, config)
 
 
-def cleanup() -> None:
-    """
-    Cleans up the distributed training environment.
-
-    Returns:
-        None
-    """
-    dist.destroy_process_group()
-    torch.cuda.synchronize()
-
-
 def setup_training(
     config,
     rank: int,
@@ -274,10 +263,13 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
             is_inner_optimizer_step = step % config.local_par.gradient_accumulation_steps == 0
             is_start_step = step == current_model_meta.inner_opt * config.local_par.gradient_accumulation_steps
 
+            logger.info("(0) Start epoch", step = step,  inner_opt_step = inner_opt_step, is_inner_optimizer_step = is_inner_optimizer_step)
+            
             # === Training and inner optimization ===
             if (
                 not is_start_step
             ):  # skip training when it is the start step, so that we can benchamrk the original model first
+                logger.info("(1) Training")
                 model.train()
                 global_model.train()
                 if training_start_time is None:
@@ -303,7 +295,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
                 # === inner optimizer ===
                 if is_inner_optimizer_step:
-                    logger.info("inner opt step", loss_batch, aux_loss_batch)
+                    logger.info("--inner opt step", loss_batch = loss_batch, aux_loss = aux_loss_batch)
 
                     for p in model.parameters():
                         if p.grad is None:
@@ -332,7 +324,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 is_inner_optimizer_step
                 and inner_opt_step % max(round(config.local_par.global_opt_interval * 0.02), 1) == 0
             ):
-                logger.info("optimizer step", loss_batch, aux_loss_batch)
+                logger.info("(2) Optimizer step", loss_batch = loss_batch, aux_loss_batch = aux_loss_batch)
                 metrics = get_status(
                     config=config,
                     model=model,
@@ -348,13 +340,12 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
             # === local validation and log metric ===
             if is_inner_optimizer_step and inner_opt_step % config.log.metric_interval == 0:
-                logger.info("start partial evaluation")
+                logger.info("(3) Local evaluation")
 
                 val_metric = evaluate_model(
                     rank=rank, step=inner_opt_step, model=model, eval_dataloader=train_dataloader, device=device
                 )
 
-                logger.info(f"evaluation before log {val_metric}")
                 metrics = (
                     get_status(
                         config=config,
@@ -381,7 +372,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 and config.ckpt.checkpoint_interval is not None
                 and inner_opt_step % config.ckpt.checkpoint_interval == 0
             ):
-                logger.info("saving checkpoint")
+                logger.info("(4) Saving checkpoint")
                 ckpt_path = os.path.join(
                     config.ckpt.checkpoint_path, f"globalver_{current_model_meta.global_ver}_inneropt_{inner_opt_step}"
                 )
@@ -418,8 +409,9 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     primary_ckpt_path=config.ckpt.validator_checkpoint_path,
                     secondary_ckpt_path=config.ckpt.checkpoint_path,
                 )[1]
-                == current_model_meta
+                != current_model_meta
             ):
+                logger.info("(5) Reload Model")
                 dist.barrier(device_ids=[rank])  # make sure everything is saved and everyone is ready to load
                 logger.info("freeing cuda memory")
                 free_cuda_models(models=[model, global_model], optimizers=[inner_optimizer], devices=[device])
@@ -440,6 +432,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
             # === Clean up ===
             if is_inner_optimizer_step:
+                logger.info("(6) Clean up")
                 loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
                 aux_loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
                 gc.collect()
@@ -447,7 +440,8 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
     except Exception:
         logger.error("Quit training", exc_info=True)
-        cleanup()
+        dist.destroy_process_group()
+        torch.cuda.synchronize()
         metric_logger.close()
 
         if rank == 0:

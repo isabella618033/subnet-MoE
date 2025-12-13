@@ -3,7 +3,7 @@ import bittensor
 from mycelia.shared.config import WorkerConfig
 from mycelia.shared.cycle import PhaseNames, PhaseResponse
 
-subtensor = bittensor.subtensor()
+subtensor = bittensor.Subtensor()
 
 
 class PhaseManager:

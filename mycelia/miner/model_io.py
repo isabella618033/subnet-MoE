@@ -127,6 +127,7 @@ def download_worker(
 
         finally:
             download_queue.task_done()
+            logger.info(f"Phase <{PhaseNames.distribute}> obligation completed.")
 
 
 def commit_worker(
@@ -170,6 +171,7 @@ def commit_worker(
 
         finally:
             commit_queue.task_done()
+            logger.info(f"Phase <{PhaseNames.commit}> obligation completed.")
 
 
 def submit_worker(
@@ -216,6 +218,7 @@ def submit_worker(
 
         finally:
             submit_queue.task_done()
+            logger.info(f"Phase <{PhaseNames.submission}> obligation completed.")
 
 
 # --- Wiring it all together ---

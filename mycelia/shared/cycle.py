@@ -59,11 +59,11 @@ def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_seconds
             check_time_str = check_time.strftime("%H:%M:%S")
 
             logger.info(
-                f"--Waiting for phase <{phase_name}> to begin in {blocks_till} blocks, check again at {check_time_str}"
+                f"--Phase <{phase_name}> to begin in {blocks_till} blocks, check again at {check_time_str}"
             )
             time.sleep(sleep_sec)
 
-    logger.info(f"Phase {phase_name} has started, {phase_response.blocks_remaining_in_phase} blocks left in phase.")
+    logger.info(f"Phase <{phase_name}> has started, {phase_response.blocks_remaining_in_phase} blocks left in phase.")
     return should_submit, phase_response.phase_end_block
 
 
@@ -75,7 +75,7 @@ def should_act(config: MinerConfig, phase_name: PhaseNames) -> tuple[bool, int, 
 
 
 def search_model_submission_destination(
-    wallet: bittensor.wallet, config: MinerConfig, subtensor: bittensor.Subtensor
+    wallet: bittensor.Wallet, config: MinerConfig, subtensor: bittensor.Subtensor
 ) -> bittensor.Axon:
     validator_miner_assignment = get_validator_miner_assignment(config, subtensor)
 
@@ -90,8 +90,8 @@ def search_model_submission_destination(
 
 
 def setup_chain_worker(config):
-    wallet = bittensor.wallet(name=config.chain.coldkey_name, hotkey=config.chain.hotkey_name)
-    subtensor = bittensor.subtensor(network=config.chain.network)
+    wallet = bittensor.Wallet(name=config.chain.coldkey_name, hotkey=config.chain.hotkey_name)
+    subtensor = bittensor.Subtensor(network=config.chain.network)
     serve_axon(
         config=config,
         wallet=wallet,

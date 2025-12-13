@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import torch._dynamo
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoConfig, PretrainedConfig
@@ -65,6 +66,10 @@ class TopKRouter(nn.Module):
         routing_weights = routing_weights.to(hidden_states.dtype)
         return router_logits, routing_weights, selected_experts
 
+@torch._dynamo.disable
+def _compute_overlap(expert_hit, available_experts):
+    expert_hit_set = set(expert_hit.detach().cpu().flatten().tolist())
+    return sorted(expert_hit_set.intersection(available_experts))
 
 class SparseMoeBlock(Qwen3NextSparseMoeBlock):
     def __init__(
@@ -89,6 +94,7 @@ class SparseMoeBlock(Qwen3NextSparseMoeBlock):
             allowed_expert_id = list(range(config.num_experts))
 
         self.available_experts = torch.as_tensor([int(k) for k in allowed_expert_id])
+        
         self.gate = TopKRouter(config, self.available_experts)
 
         self.experts = nn.ModuleDict(
@@ -112,10 +118,11 @@ class SparseMoeBlock(Qwen3NextSparseMoeBlock):
 
         # Loop over all available experts in the model and perform the computation on each expert
         expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-        self.available_experts = self.available_experts.to(expert_hit.device)
-        for expert_idx in expert_hit:
-            if expert_idx not in self.available_experts:
-                continue
+
+        qualified_expert_set = _compute_overlap(expert_hit, self.available_experts)
+
+        for expert_idx in qualified_expert_set:
+
             expert_layer = self.experts[str(expert_idx.item())]
             idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
 

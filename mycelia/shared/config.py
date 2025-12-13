@@ -294,8 +294,8 @@ class WorkerConfig(BaseConfig):
             self.ckpt.miner_submission_path = self.run.root_path / self.ckpt.miner_submission_path
 
     def _fill_wallet_data(self):
-        wallet = bittensor.wallet(name=self.chain.coldkey_name, hotkey=self.chain.hotkey_name)
-        subtensor = bittensor.subtensor(network=self.chain.network)
+        wallet = bittensor.Wallet(name=self.chain.coldkey_name, hotkey=self.chain.hotkey_name)
+        subtensor = bittensor.Subtensor(network=self.chain.network)
         try:
             self.chain.hotkey_ss58 = wallet.hotkey.ss58_address
             self.chain.coldkey_ss58 = wallet.coldkeypub.ss58_address

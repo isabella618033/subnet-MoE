@@ -52,6 +52,6 @@ if __name__ == "__main__":
         config = OwnerConfig()
 
     config.write()
-    subtensor = bittensor.subtensor(network=config.chain.network)
+    subtensor = bittensor.Subtensor(network=config.chain.network)
     phase_manager = PhaseManager(config, subtensor)
     uvicorn.run(app, host=config.owner.app_ip, port=config.owner.app_port)

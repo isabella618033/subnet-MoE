@@ -75,19 +75,17 @@ def commit_status(
     data = status.model_dump_json()
 
     if encrypted:
-
         encrypted_bytes = bittensor.extras.timelock.encrypt(
-            message=data.encode("utf-8"),
+            data=data.encode("utf-8"),
             n_blocks=n_blocks,
-        )
-
+        )[0]
+        logger.info("encrypted_bytes", encrypted_bytes)
         data = hashlib.sha256(encrypted_bytes).digest()
-
 
     subtensor.set_commitment(
         wallet=wallet,
         netuid=config.chain.netuid,
-        data=data,
+        data=data.hex(),
     )
     return
 
@@ -120,8 +118,8 @@ def get_chain_commits(
 
 # --- setup chain worker ---
 def setup_chain_worker(config):
-    wallet = bittensor.wallet(name=config.chain.coldkey_name, hotkey=config.chain.hotkey_name)
-    subtensor = bittensor.subtensor(network=config.chain.network)
+    wallet = bittensor.Wallet(name=config.chain.coldkey_name, hotkey=config.chain.hotkey_name)
+    subtensor = bittensor.Subtensor(network=config.chain.network)
     serve_axon(
         config=config,
         wallet=wallet,
@@ -144,7 +142,7 @@ def submit_weight() -> str:
 def scan_chain_for_new_model(
     current_model_meta: ModelMeta | None,
     config: WorkerConfig,
-    subtensor: bittensor.subtensor,
+    subtensor: bittensor.Subtensor,
 ) -> tuple[bool, list[dict]]:
     """
     Returns:

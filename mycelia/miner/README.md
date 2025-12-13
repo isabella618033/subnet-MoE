@@ -42,6 +42,8 @@ Afterwards, when you are running the validator, simply use `--path` to point to 
 
 Trains the model locally and saves checkpoints.
 ```bash
+env TORCHDYNAMO_CAPTURE_SCALAR_OUTPUTS=1 
+
 python mycelia/miner/train.py \
   --path /home/isabella/crucible/subnet-MoE/checkpoints/miner/<your hotkey>/<run name>/
 ```

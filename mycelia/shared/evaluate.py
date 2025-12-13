@@ -49,13 +49,14 @@ def evaluate_model(
         for batch_step, batch in enumerate(iterable=eval_dataloader):
             device_batch = {}
             for key in batch.keys():
-                device_batch[key] = batch[key].to(device)
+                device_batch[key] = batch[key].to(model.device)
 
             with torch.amp.autocast("cuda", dtype=torch.float16):
                 outputs = model(**device_batch)
-                
+
                 logger.info('eval output.loss', outputs.loss.detach().item())
-                loss_sum += float(outputs.loss.detach().item())
+                if not torch.isnan(outputs.loss):
+                    loss_sum += float(outputs.loss.detach().item())
                 aux_loss_sum += (
                     float(outputs.aux_loss.detach().item())
                     if hasattr(outputs, "aux_loss") and outputs.aux_loss is not None

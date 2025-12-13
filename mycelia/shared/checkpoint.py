@@ -64,11 +64,11 @@ def start_model_from(
 
     # --- handling either miner / validator checkpoint not found ---
     if not secondary_ckpt_found:
-        logger.info("secondary checkpoint not found", secondary_ckpt_path=secondary_ckpt_path)
+        logger.info("secondary checkpoint not found, using primary", primary_ckpt_path=primary_ckpt_path, secondary_ckpt_path=secondary_ckpt_path)
         return primary_ckpt_found, primary_model_meta, latest_primary_ckpt
 
     if not primary_ckpt_found and latest_secondary_ckpt is not None:
-        logger.info("primary checkpoint not found", primary_ckpt_path=primary_ckpt_path)
+        logger.info("primary checkpoint not found, using secoundary", primary_ckpt_path=primary_ckpt_path, secondary_ckpt_path=secondary_ckpt_path)
         return secondary_ckpt_found, secondary_model_meta, latest_secondary_ckpt
 
     # --- Return based on more updated version ---
@@ -113,16 +113,16 @@ def get_resume_info(
             ckpt_files = get_sorted_checkpoints(path)
 
         except FileNotFoundError:
-            logger.info(f"rank {rank}: Checkpoint path {config.ckpt.checkpoint_path} not found")
+            logger.info("Looking for checkpoint from folder", result = "folder not found", path = {config.ckpt.checkpoint_path})
             return False, ModelMeta(), None
 
         if len(ckpt_files) == 0:
-            logger.info(f"rank {rank}: No checkpoints found in {config.ckpt.checkpoint_path}")
+            logger.info("Looking for checkpoint from folder", result = "dosent exist any file", path = {config.ckpt.checkpoint_path})
             return False, ModelMeta(), None
 
         latest_ckpt = ckpt_files[0].path
         model_meta = ckpt_files[0]
-        logger.info(f"rank {rank}: Latest checkpoint found in {latest_ckpt}")
+        logger.info("Looking for checkpoint from folder", result = "found", path = {config.ckpt.checkpoint_path})
         return True, model_meta, latest_ckpt
 
 
@@ -346,7 +346,7 @@ def compile_full_state_dict_from_path(checkpoint_path):
         with f as fh:
             state_dict = torch.load(fh, map_location=torch.device("cpu"))
             full_state_dict = full_state_dict | state_dict["model_state_dict"]
-            logger.info(f"loaded checkpoint",  path = f, loss = round(state_dict['loss'] if 'loss' in state_dict else -1, 5))
+            logger.info(f"loaded checkpoint file",  path = f, loss = round(state_dict['loss'] if 'loss' in state_dict else -1, 5))
 
     return full_state_dict
 

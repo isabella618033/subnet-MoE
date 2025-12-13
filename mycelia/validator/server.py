@@ -318,6 +318,6 @@ if __name__ == "__main__":
 
     config.write()
 
-    subtensor = bittensor.subtensor(network=config.chain.network)
+    subtensor = bittensor.Subtensor(network=config.chain.network)
 
     uvicorn.run(app, host=config.chain.ip, port=config.chain.port)
