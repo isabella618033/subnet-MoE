@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from mycelia.shared.app_logging import configure_logging, structlog
+from mycelia.shared.chain import _subtensor_lock
 from mycelia.shared.checkpoint import (
     delete_old_checkpoints_by_hotkey,
     get_resume_info,
@@ -260,7 +261,9 @@ async def submit_checkpoint(
         raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
 
     # Stream write + compute SHA256
-    model_name = f"hotkey_{target_hotkey_ss58}_block_{subtensor.block}.pt"
+    with _subtensor_lock:
+        block = subtensor.block
+    model_name = f"hotkey_{target_hotkey_ss58}_block_{block}.pt"
     hasher = hashlib.sha256()
     bytes_written = 0
     dest_path = config.ckpt.miner_submission_path / model_name

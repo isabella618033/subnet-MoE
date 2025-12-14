@@ -301,7 +301,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
         ValidatorChainCommit(
             model_hash="xxx",
             model_version=global_opt_step,
-            expert_group=1,
+            expert_group=config.task.expert_group_id,
             miner_seed=0,  # this should reveal later
         ),
     )
@@ -333,10 +333,10 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 ValidatorChainCommit(
                     model_hash=current_model_hash,
                     model_version=global_opt_step,
-                    expert_group=1,
+                    expert_group=config.task.expert_group_id,
                     miner_seed=secrets.randbits(24),  # this should reveal later
                     encrypt=True,
-                    n_block=subtensor.block - phase_end_block,
+                    n_block=max(0, subtensor.block - phase_end_block),
                 ),
             )
 
@@ -430,7 +430,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 ValidatorChainCommit(
                     model_hash=current_model_hash,
                     model_version=global_opt_step,
-                    expert_group=1,
+                    expert_group=config.task.expert_group_id,
                     miner_seed=0,
                 ),
             )

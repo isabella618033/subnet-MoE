@@ -1,4 +1,3 @@
-import copy
 import datetime
 import gc
 import os
@@ -86,13 +85,9 @@ def setup_training(
     current_model_meta: ModelMeta,
 ) -> tuple[
     torch.nn.Module,  # model
-    torch.nn.Module,  # global_model
     torch.optim.Optimizer,  # inner_optimizer
-    torch.optim.Optimizer,  # outer_optimizer
     torch.amp.GradScaler,  # inner_scaler
-    torch.amp.GradScaler,  # outer_scaler
     torch.optim.lr_scheduler.LRScheduler,  # scheduler
-    # int,  # start_step
     "ExpertManager",  # em
     StatefulDataLoader,
     dict,  # current model version
@@ -133,17 +128,10 @@ def setup_training(
     expert_manager = ExpertManager(config)
     model, model_meta = load_model(rank, config, expert_manager, subtensor, wallet)
     model = model.to(device)
-    global_model = copy.deepcopy(model).cpu()
 
     # === optimizers ===
     logger.info(f"optimizer")
     inner_optimizer = torch.optim.AdamW(model.named_parameters(), lr=config.opt.lr, weight_decay=0.1, betas=(0.9, 0.95))
-    outer_optimizer = torch.optim.SGD(
-        global_model.named_parameters(),
-        lr=config.opt.outer_lr,
-        momentum=config.opt.outer_momentum,
-        nesterov=True,
-    )
 
     # === scheduler === (for inner optimizer)
     logger.info(f"scheduler")
@@ -157,9 +145,6 @@ def setup_training(
     inner_scaler = torch.amp.GradScaler(
         "cuda", enabled=(get_nested_attr(config, "model.precision", "") == "fp16-mixed")
     )
-    outer_scaler = torch.amp.GradScaler(
-        "cuda", enabled=(get_nested_attr(config, "model.precision", "") == "fp16-mixed")
-    )
 
     # === dataloader ===
     train_dataloader = get_dataloader(config, rank=rank, world_size=config.task.data.world_size, tokenizer=tokenizer)
@@ -170,10 +155,8 @@ def setup_training(
             config=config,
             checkpoint_path=latest_checkpoint_path,
             inner_optimizer=inner_optimizer,
-            outer_optimizer=outer_optimizer,
             scheduler=scheduler,
             inner_scaler=inner_scaler,
-            outer_scaler=outer_scaler,
             rank=rank,
             device=device,
             data_loader=train_dataloader,
@@ -182,11 +165,8 @@ def setup_training(
     logger.info(f"setup_training: success!")
     return (
         model,
-        global_model,
         inner_optimizer,
-        outer_optimizer,
         inner_scaler,
-        outer_scaler,
         scheduler,
         expert_manager,
         train_dataloader,
@@ -230,13 +210,9 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
     # === set up training ===
     (
         model,
-        global_model,
         inner_optimizer,
-        outer_optimizer,
         inner_scaler,
-        outer_scaler,
         scheduler,
-        # start_step,
         expert_manager,
         train_dataloader,
         current_model_meta,
@@ -250,10 +226,9 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
     training_start_time = None
 
     inner_optimizer.zero_grad()
-    outer_optimizer.zero_grad()
     try:
         for step, batch in enumerate(
-            iterable=train_dataloader, start=current_model_meta.inner_opt * config.local_par.gradient_accumulation_steps
+            iterable=train_dataloader, start=max(0, current_model_meta.inner_opt) * config.local_par.gradient_accumulation_steps
         ):
             # for each step, we run 1 backward
             # for each inner_opt_step, we run local optimization; gradient_accumulation_steps = 1 real step
@@ -263,7 +238,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
             is_inner_optimizer_step = step % config.local_par.gradient_accumulation_steps == 0
             is_start_step = step == current_model_meta.inner_opt * config.local_par.gradient_accumulation_steps
 
-            logger.info("(0) Start epoch", step = step,  inner_opt_step = inner_opt_step, is_inner_optimizer_step = is_inner_optimizer_step)
+            logger.info("(0) Start epoch", step = step,  inner_opt_step = inner_opt_step, is_inner_optimizer_step = is_inner_optimizer_step, gradient_accumulation_steps = config.local_par.gradient_accumulation_steps)
             
             # === Training and inner optimization ===
             if (
@@ -271,7 +246,6 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
             ):  # skip training when it is the start step, so that we can benchamrk the original model first
                 logger.info("(1) Training")
                 model.train()
-                global_model.train()
                 if training_start_time is None:
                     training_start_time = time.time()
 
@@ -291,8 +265,10 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
                 inner_scaler.scale(loss).backward()
 
-                del loss, batch_device, outputs
-
+                # === Aggressively free intermediate tensors ===
+                del loss, aux_loss, batch_device, outputs
+                gc.collect()
+                
                 # === inner optimizer ===
                 if is_inner_optimizer_step:
                     logger.info("--inner opt step", loss_batch = loss_batch, aux_loss = aux_loss_batch)
@@ -319,7 +295,10 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     total_training_time += training_time
                     training_start_time = None
 
-            # === Log metric ===
+                    # === Clear memory after optimizer step ===
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    logger.info("Memory cleared after optimizer step")            # === Log metric ===
             if (
                 is_inner_optimizer_step
                 and inner_opt_step % max(round(config.local_par.global_opt_interval * 0.02), 1) == 0
@@ -381,11 +360,9 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     checkpoint_path=ckpt_path,
                     model=model,
                     inner_optimizer=inner_optimizer,
-                    outer_optimizer=outer_optimizer,
                     scheduler=scheduler,
                     loss=loss_batch.item(),
                     inner_scaler=inner_scaler,
-                    outer_scaler=outer_scaler,
                     data_loader=train_dataloader,
                     save_global_state=rank == 0,
                     rank=rank,
@@ -414,17 +391,13 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 logger.info("(5) Reload Model")
                 dist.barrier(device_ids=[rank])  # make sure everything is saved and everyone is ready to load
                 logger.info("freeing cuda memory")
-                free_cuda_models(models=[model, global_model], optimizers=[inner_optimizer], devices=[device])
+                free_cuda_models(models=[model], optimizers=[inner_optimizer], devices=[device])
                 logger.info("restarting model")
                 (
                     model,
-                    global_model,
                     inner_optimizer,
-                    outer_optimizer,
                     inner_scaler,
-                    outer_scaler,
                     scheduler,
-                    # start_step,
                     expert_manager,
                     train_dataloader,
                     current_model_version,
@@ -445,7 +418,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
         metric_logger.close()
 
         if rank == 0:
-            torch.save(global_model.state_dict(), "mycelia_final.pt")
+            torch.save(model.state_dict(), "mycelia_final.pt")
 
 
 def run_distributed_training() -> None:

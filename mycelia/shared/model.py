@@ -22,14 +22,14 @@ def get_model_from_checkpoint(
 
     logger.info(
         "Get base model for checkpoint",
-        group_ids=[config.moe.my_expert_group_id] if config.role == "miner" else None,
+        group_ids=[config.task.expert_group_id] if config.role == "miner" else None,
         partial=(config.role == "miner"),
     )
     # get base model
     model = get_base_model(
         config,
         expert_manager=expert_manager,
-        group_ids=[config.moe.my_expert_group_id] if config.role == "miner" else None,
+        group_ids=[config.task.expert_group_id] if config.role == "miner" else None,
         partial=(config.role == "miner"),
     ).to(config.model.device)
 

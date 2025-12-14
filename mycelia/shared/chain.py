@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -15,6 +16,9 @@ from mycelia.shared.client import download_model
 from mycelia.shared.config import WorkerConfig
 
 logger = structlog.get_logger(__name__)
+
+# Global lock for subtensor WebSocket access to prevent concurrent recv calls
+_subtensor_lock = threading.Lock()
 
 
 # --- Info gather ---
@@ -45,6 +49,46 @@ class ValidatorChainCommit(BaseModel):
 class MinerChainCommit(BaseModel):
     expert_group: int | None = None
     model_hash: str | None = None
+    encrypted: bool | None = False 
+
+
+def encrypt_data(data: str, n_blocks: int = 5) -> str:
+    """
+    Encrypt commitment data using timelock encryption.
+    
+    Args:
+        data: The data string to encrypt
+        n_blocks: Number of blocks for timelock encryption (default: 5)
+    
+    Returns:
+        SHA256 hash of the encrypted bytes as a hex string
+    """
+    encrypted_bytes = bittensor.extras.timelock.encrypt(
+        data=data.encode("utf-8"),
+        n_blocks=n_blocks,
+    )[0]
+    logger.info("Encrypted commitment data", n_blocks=n_blocks)
+    return hashlib.sha256(encrypted_bytes).digest().hex()
+
+
+def decrypt_data(encrypted_hash: str, original_data: str | None = None) -> str:
+    """
+    Decrypt commitment data using timelock decryption.
+    
+    Args:
+        encrypted_hash: The encrypted hash or data to decrypt
+        original_data: Optional original data for verification
+    
+    Returns:
+        Decrypted data string, or the input hash if decryption fails
+    """
+    try:
+        decrypted = bittensor.extras.timelock.decrypt(encrypted_hash)
+        logger.info("Decrypted commitment data successfully")
+        return decrypted
+    except Exception as e:
+        logger.warning("Failed to decrypt commitment data", error=str(e))
+        return encrypted_hash
 
 
 def commit_status(
@@ -72,36 +116,47 @@ def commit_status(
           you want the data to be revealed (fallback to 200 if missing).
     """
     # Serialize status first; same input for both plain + encrypted paths
-    data = status.model_dump_json()
+    data_dict = status.model_dump()
 
     if encrypted:
-        encrypted_bytes = bittensor.extras.timelock.encrypt(
-            data=data.encode("utf-8"),
-            n_blocks=n_blocks,
-        )[0]
-        logger.info("encrypted_bytes", encrypted_bytes)
-        data = hashlib.sha256(encrypted_bytes).digest()
+        if "model_hash" in data_dict and data_dict["model_hash"]:
+            data_dict["model_hash"] = encrypt_data(data_dict["model_hash"], n_blocks=n_blocks)
+        data_dict["encrypted"] = True
+    
+    data = json.dumps(data_dict)
 
-    subtensor.set_commitment(
-        wallet=wallet,
-        netuid=config.chain.netuid,
-        data=data.hex(),
-    )
+    with _subtensor_lock:
+        subtensor.set_commitment(
+            wallet=wallet,
+            netuid=config.chain.netuid,
+            data=data,
+        )
     return
 
 
 def get_chain_commits(
     config: WorkerConfig, subtensor: bittensor.Subtensor
 ) -> tuple[WorkerChainCommit, bittensor.Neuron]:
-    all_commitments = subtensor.get_all_commitments(netuid=config.chain.netuid)
-    metagraph = subtensor.metagraph(netuid=config.chain.netuid)
+    with _subtensor_lock:
+        all_commitments = subtensor.get_all_commitments(netuid=config.chain.netuid)
+        metagraph = subtensor.metagraph(netuid=config.chain.netuid)
+    
     parsed = []
 
     for hotkey, commit in all_commitments.items():
         uid = metagraph.hotkeys.index(hotkey)
-        status_dict = json.loads(commit)
 
         try:
+            status_dict = json.loads(commit)
+            
+            # Decrypt model_hash only if it appears to be encrypted (hex string of SHA256 hash)
+            if "model_hash" in status_dict and status_dict["model_hash"] :
+                model_hash = status_dict["model_hash"]
+
+                if status_dict.get("encrypted", False):
+                    status_dict["model_hash"] = decrypt_data(model_hash)
+                    status_dict["encrypted"] = False
+
             chain_commit = (
                 ValidatorChainCommit.model_validate(status_dict)
                 if "miner_seed" in status_dict

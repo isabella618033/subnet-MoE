@@ -16,6 +16,7 @@ from mycelia.shared.chain import (
     WorkerChainCommit,
     get_chain_commits,
     serve_axon,
+    _subtensor_lock,
 )
 from mycelia.shared.config import MinerConfig, ValidatorConfig, WorkerConfig
 from mycelia.shared.helper import h256_int, parse_dynamic_filename
@@ -53,7 +54,7 @@ def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_seconds
     while not should_submit:
         should_submit, blocks_till, phase_response = should_act(config, phase_name)
         if should_submit is False and blocks_till > 0:
-            sleep_sec = min(blocks_till, max(poll_fallback_seconds, blocks_till / 2)) * 12
+            sleep_sec = min(blocks_till, max(poll_fallback_seconds, blocks_till / 3)) * 12
 
             check_time = datetime.now() + timedelta(seconds=sleep_sec)
             check_time_str = check_time.strftime("%H:%M:%S")
@@ -84,7 +85,8 @@ def search_model_submission_destination(
             assigned_validator_hotkey = validator
             break
 
-    metagraph = subtensor.metagraph(netuid=config.chain.netuid)
+    with _subtensor_lock:
+        metagraph = subtensor.metagraph(netuid=config.chain.netuid)
     uid = metagraph.hotkeys.index(assigned_validator_hotkey)
     return metagraph.axons[uid]
 
@@ -183,7 +185,7 @@ def get_validator_seed_from_commit(config, commits):
         neuron.hotkey: commit.miner_seed
         for commit, neuron in commits
         if isinstance(commit, ValidatorChainCommit)
-        and getattr(commit, "expert_group", None) == config.moe.my_expert_group_id
+        and getattr(commit, "expert_group", None) == config.task.expert_group_id
     }
     return validator_seeds
 
@@ -193,7 +195,7 @@ def get_miners_from_commit(config, commits):
         neuron.hotkey
         for commit, neuron in commits
         if isinstance(commit, MinerChainCommit)
-        and getattr(commit, "expert_group", None) == config.moe.my_expert_group_id
+        and getattr(commit, "expert_group", None) == config.task.expert_group_id
     ]
 
     return miners

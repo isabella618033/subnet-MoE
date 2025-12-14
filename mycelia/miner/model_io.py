@@ -15,6 +15,7 @@ from mycelia.shared.checkpoint import (
 from mycelia.shared.client import submit_model
 from mycelia.shared.config import MinerConfig, parse_args
 from mycelia.shared.cycle import search_model_submission_destination, setup_chain_worker, wait_till
+from mycelia.shared.chain import _subtensor_lock
 from mycelia.shared.helper import get_model_hash
 from mycelia.shared.model import fetch_model_from_chain
 from mycelia.sn_owner.cycle import PhaseNames
@@ -67,7 +68,7 @@ def scheduler_service(
         wait_till(config, phase_name=PhaseNames.distribute, poll_fallback_seconds=poll_fallback_seconds)
         download_queue.put(Job(job_type=JobType.DOWNLOAD))
 
-        # --------- SUBMISSION SCHEDULING ---------
+        # --------- COMISSION SCHEDULING ---------
         _, phase_end_block = wait_till(
             config, phase_name=PhaseNames.commit, poll_fallback_seconds=poll_fallback_seconds
         )
@@ -75,6 +76,7 @@ def scheduler_service(
 
         # --------- SUBMISSION SCHEDULING ---------
         wait_till(config, phase_name=PhaseNames.submission, poll_fallback_seconds=poll_fallback_seconds)
+        logger.info("A submission phase started, enqueue submit job")
         submit_queue.put(Job(job_type=JobType.SUBMIT))
 
 
@@ -153,13 +155,17 @@ def commit_worker(
 
             model_path = f"{latest_checkpoint_path}/model.pt"
             model_hash = get_model_hash(compile_full_state_dict_from_path(model_path)).hex()
+            with _subtensor_lock:
+                current_block = subtensor.block
+            
+            n_blocks = max(1, job.phase_end_block - current_block)  # Ensure positive
             commit_status(
                 config,
                 wallet,
                 subtensor,
                 MinerChainCommit(expert_group=config.task.expert_group_id, model_hash=model_hash),
                 encrypted=True,
-                n_blocks=job.phase_end_block - subtensor.block,
+                n_blocks=n_blocks,
             )
 
         except FileNotReadyError as e:
@@ -186,26 +192,32 @@ def submit_worker(
     """
     while True:
         job = submit_queue.get()
-
+        logger.info("B submit_worker picked up a job")
         try:
+            logger.info("C submit_worker acquiring lock to read latest_checkpoint_path")
             with shared_state.lock:
                 latest_checkpoint_path = shared_state.latest_checkpoint_path
 
+            logger.info("D submit_worker released lock after reading latest_checkpoint_path")
             if latest_checkpoint_path is None:
                 raise FileNotReadyError("Not checkpoint found, skip submission.")
 
-            destination_axon = search_model_submission_destination(
-                wallet=wallet,
-                config=config,
-                subtensor=subtensor,
-            )
+            logger.info("E submit_worker searching for model submission destination")
+            with _subtensor_lock:
+                destination_axon = search_model_submission_destination(
+                    wallet=wallet,
+                    config=config,
+                    subtensor=subtensor,
+                )
+                block = subtensor.block
 
+            logger.info("F submit_worker found destination, submitting model")
             submit_model(
                 url=f"http://{destination_axon.ip}:{destination_axon.port}/submit-checkpoint",
                 token="",
                 my_hotkey=wallet.hotkey,  # type: ignore
                 target_hotkey_ss58=destination_axon.hotkey,
-                block=subtensor.block,
+                block=block,
                 model_path=f"{latest_checkpoint_path}/model.pt",
             )
 

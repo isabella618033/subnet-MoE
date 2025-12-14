@@ -16,12 +16,12 @@ class PhaseManager:
     def init_phases(self, config, names):
         # ordered phase
         phases = [
-            {"name": names.distribute, "length": config.cycle.distribute_period},
-            {"name": names.train, "length": config.cycle.train_period},
-            {"name": names.commit, "length": config.cycle.commit_period},
-            {"name": names.submission, "length": config.cycle.submission_period},
-            {"name": names.validate, "length": config.cycle.validate_period},
-            {"name": names.merge, "length": config.cycle.merge_period},
+            {"name": names.distribute, "length": config.cycle.distribute_period}, # miner download model from validator
+            {"name": names.train, "length": config.cycle.train_period}, # miner train
+            {"name": names.commit, "length": config.cycle.commit_period}, # miner commit model hash and validator commit seed
+            {"name": names.submission, "length": config.cycle.submission_period}, # miner submit model to validator
+            {"name": names.validate, "length": config.cycle.validate_period}, # validator validate models from miners
+            {"name": names.merge, "length": config.cycle.merge_period}, # validator merge models
         ]
         return phases
 

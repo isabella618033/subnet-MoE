@@ -78,13 +78,13 @@ class ChainCfg(BaseConfig):
 
 
 class CycleCfg(BaseConfig):
-    cycle_length: int = 35  # validators run a validation round everytime when sub.block % cycle_length == 0
-    distribute_period: int = 10
-    train_period: int = 20
-    commit_period: int = 5
+    cycle_length: int = 45  # validators run a validation round everytime when sub.block % cycle_length == 0
+    distribute_period: int = 2
+    train_period: int = 10
+    commit_period: int = 3
     submission_period: int = 10
     validate_period: int = 10
-    merge_period: int = 20
+    merge_period: int = 10
 
     owner_url: str = "http://localhost:7000"
 
@@ -109,7 +109,7 @@ class DataCfg(BaseConfig):
     data_dir: str | None = "en"
     batch_size: PositiveInt = 512
     sequence_length: PositiveInt = 1024
-    per_device_train_batch_size: PositiveInt = 5
+    per_device_train_batch_size: PositiveInt = 2
     world_size: int = 10  # TODO
     rank: int = 1  # TODO
     dataset_class: str | None = None
@@ -141,7 +141,7 @@ class OptimizerCfg(BaseConfig):
 
 
 class ParallelismCfg(BaseConfig):  # parallelism for local training
-    gradient_accumulation_steps: PositiveInt = 100
+    gradient_accumulation_steps: PositiveInt = 5
     global_opt_interval: PositiveInt = 100
     world_size: PositiveInt = 2
     port: PositiveInt = 29500

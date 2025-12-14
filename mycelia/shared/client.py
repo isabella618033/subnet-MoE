@@ -19,6 +19,7 @@ from requests.exceptions import (
 )
 from substrateinterface import Keypair
 
+from mycelia.shared.app_logging import structlog
 from mycelia.shared.schema import (
     SignedDownloadRequestMessage,
     SignedModelSubmitMessage,
@@ -26,6 +27,8 @@ from mycelia.shared.schema import (
     construct_model_message,
     sign_message,
 )
+
+logger = structlog.get_logger(__name__)
 
 CHUNK = 1024 * 1024  # 1 MiB
 
@@ -67,6 +70,15 @@ def submit_model(
 
     Returns parsed JSON on success. Raises RuntimeError with context on failure.
     """
+    logger.info(
+        "Starting model submission",
+        url=url,
+        model_path=model_path,
+        target_hotkey=target_hotkey_ss58,
+        block=block,
+        retries=retries,
+    )
+
     # --- preflight checks ---
     if not isinstance(url, str) or not url.startswith(("http://", "https://")):
         raise ValueError("url must start with http:// or https://")
@@ -74,8 +86,11 @@ def submit_model(
     if not os.path.isfile(model_path):
         raise FileNotFoundError(f"File not found: {model_path}")
 
-    if os.path.getsize(model_path) == 0:
+    file_size = os.path.getsize(model_path)
+    if file_size == 0:
         raise ValueError(f"File is empty: {model_path}")
+
+    logger.info("Model file validated", file_size=file_size, human_size=human(file_size))
 
     data = SignedModelSubmitMessage(
         target_hotkey_ss58=target_hotkey_ss58,
@@ -92,14 +107,18 @@ def submit_model(
         for k, v in extra_form.items():
             data[k] = v if isinstance(v, str | bytes) else str(v)
 
+    logger.info("Request payload prepared", extra_fields=list(extra_form.keys()) if extra_form else None)
+
     # --- retry loop for transient failures ---
     attempt = 0
     last_exc: Exception | None = None
 
     while attempt <= retries:
         try:
+            logger.info(f"Submission attempt {attempt + 1}/{retries + 1}")
             with open(model_path, "rb") as fh:
                 files = {"file": (os.path.basename(model_path), fh)}
+                logger.info("Uploading file to server", attempt=attempt + 1)
                 resp: Response = requests.post(
                     url,
                     headers={"Authorization": f"Bearer {token}"},
@@ -107,6 +126,7 @@ def submit_model(
                     data=data,
                     timeout=timeout_s,
                 )
+            logger.info("HTTP response received", status_code=resp.status_code, attempt=attempt + 1)
 
             # Raise on non-2xx
             try:
@@ -122,36 +142,56 @@ def submit_model(
                 non_retryable = {400, 401, 403, 404, 405, 409, 422}
                 detail = f"HTTP {resp.status_code}: {err_body}"
                 if resp.status_code in non_retryable or attempt == retries:
+                    logger.error(
+                        "Submission failed (non-retryable or final attempt)",
+                        status_code=resp.status_code,
+                        error_body=err_body,
+                        attempt=attempt + 1,
+                    )
                     raise RuntimeError(f"Upload failed: {detail}") from http_err
                 else:
                     last_exc = RuntimeError(detail)
+                    logger.warning(
+                        "HTTP error, will retry",
+                        status_code=resp.status_code,
+                        error_body=err_body,
+                        attempt=attempt + 1,
+                    )
                     # fall through to retry
                     raise
 
             # Parse success JSON (server should return metadata)
             try:
-                return resp.json()
+                result = resp.json()
+                logger.info("Submission successful", response=result)
+                return result
             except ValueError:
                 # Not JSON; return minimal info
+                logger.info("Submission successful (non-JSON response)", status_code=resp.status_code)
                 return {"status": "ok", "http_status": resp.status_code, "text": resp.text}
 
         except (Timeout, ReqConnectionError) as net_err:
             # Retry timeouts / connection errors unless we exhausted attempts
             last_exc = net_err
+            logger.warning("Network error during submission, will retry", error=str(net_err), attempt=attempt + 1)
         except RequestException as req_err:
             # Generic requests error: retry unless final attempt
             last_exc = req_err
+            logger.warning("Request error during submission, will retry", error=str(req_err), attempt=attempt + 1)
         except Exception as e:
             # File I/O during open/read already handled above; treat others as fatal
+            logger.error("Unexpected error during upload", error=str(e))
             raise RuntimeError(f"Unexpected error during upload: {e}") from e
 
         # If we got here, we plan to retry
         attempt += 1
         if attempt <= retries:
             sleep_s = backoff**attempt
+            logger.info("Retrying after backoff", sleep_seconds=sleep_s, attempt=attempt + 1)
             time.sleep(sleep_s)
 
     # Exhausted retries
+    logger.error("Submission failed after all retries exhausted", total_attempts=retries + 1, last_error=str(last_exc))
     raise RuntimeError(f"Upload failed after {retries + 1} attempts: {last_exc}")
 
 

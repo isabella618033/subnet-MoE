@@ -417,7 +417,7 @@ def load_checkpoint(
     return global_state_dict["loss"]
 
 
-def get_sorted_checkpoints(checkpoint_path: str) -> dict[Path, ModelMeta]:
+def get_sorted_checkpoints(checkpoint_path: str) -> dict[ModelMeta]:
     fs, root = fsspec.core.url_to_fs(checkpoint_path)
 
     ckpt_files = []
@@ -456,9 +456,9 @@ def delete_old_checkpoints(checkpoint_path: str, topk: int) -> list[str]:
     sorted_ckpt_files = get_sorted_checkpoints(checkpoint_path)
 
     ckpt_deleted = []
-    for ckpt_file, _ in sorted_ckpt_files[:-topk]:
-        fs.rm(ckpt_file, recursive=True)
-        ckpt_deleted.append(ckpt_file)
+    for model_meta in sorted_ckpt_files[:-topk]:
+        fs.rm(str(model_meta.path), recursive=True)
+        ckpt_deleted.append(str(model_meta.path))
     return ckpt_deleted
 
 
