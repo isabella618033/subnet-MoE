@@ -5,7 +5,7 @@ from queue import Queue
 from threading import Lock, Thread
 
 from mycelia.shared.app_logging import configure_logging, structlog
-from mycelia.shared.chain import MinerChainCommit, commit_status
+from mycelia.shared.chain import MinerChainCommit, _subtensor_lock, commit_status
 from mycelia.shared.checkpoint import (
     ModelMeta,
     compile_full_state_dict_from_path,
@@ -15,9 +15,9 @@ from mycelia.shared.checkpoint import (
 from mycelia.shared.client import submit_model
 from mycelia.shared.config import MinerConfig, parse_args
 from mycelia.shared.cycle import search_model_submission_destination, setup_chain_worker, wait_till
-from mycelia.shared.chain import _subtensor_lock
 from mycelia.shared.helper import get_model_hash
 from mycelia.shared.model import fetch_model_from_chain
+from mycelia.shared.schema import sign_message
 from mycelia.sn_owner.cycle import PhaseNames
 
 configure_logging()
@@ -157,17 +157,21 @@ def commit_worker(
             model_hash = get_model_hash(compile_full_state_dict_from_path(model_path)).hex()
             with _subtensor_lock:
                 current_block = subtensor.block
-            
+
             n_blocks = max(1, job.phase_end_block - current_block)  # Ensure positive
-            commit_status(
+            commited_message = commit_status(
                 config,
                 wallet,
                 subtensor,
-                MinerChainCommit(expert_group=config.task.expert_group_id, model_hash=model_hash),
+                MinerChainCommit(
+                    expert_group=config.task.expert_group_id,
+                    model_hash=model_hash,
+                    # signed_model_hash=sign_message(origin_hotkey_ss58=wallet.hotkey, message=model_hash),
+                ),
                 encrypted=True,
                 n_blocks=n_blocks,
             )
-
+            logger.info(f"Committed with hash: {commited_message}.")
         except FileNotReadyError as e:
             logger.warning(f"[commit_worker] File not ready error: {e}")
 

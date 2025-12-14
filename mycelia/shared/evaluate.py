@@ -54,7 +54,7 @@ def evaluate_model(
             with torch.amp.autocast("cuda", dtype=torch.float16):
                 outputs = model(**device_batch)
 
-                logger.info('eval output.loss', outputs.loss.detach().item())
+                logger.info("eval output.loss", outputs.loss.detach().item())
                 if not torch.isnan(outputs.loss):
                     loss_sum += float(outputs.loss.detach().item())
                 aux_loss_sum += (

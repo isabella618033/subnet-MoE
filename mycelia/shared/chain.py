@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import threading
@@ -14,6 +15,7 @@ from mycelia.shared.app_logging import structlog
 from mycelia.shared.checkpoint import ModelMeta
 from mycelia.shared.client import download_model
 from mycelia.shared.config import WorkerConfig
+from mycelia.shared.schema import verify_message
 
 logger = structlog.get_logger(__name__)
 
@@ -42,53 +44,146 @@ class WorkerChainCommit(BaseModel):
 class ValidatorChainCommit(BaseModel):
     model_hash: str | None = None
     model_version: int | None = None
-    expert_group: int | None = None  # block
-    miner_seed: int | None = None
+    expert_group: int | None = None
+    miner_seed: int | None = None  # encryt(seed)
+    encrypted: int = -1
 
 
 class MinerChainCommit(BaseModel):
     expert_group: int | None = None
-    model_hash: str | None = None
-    encrypted: bool | None = False 
+    model_hash: str | None = None  # encrypt(hash)
+    # signed_model_hash: str | None = None  # sign(hash)
+    encrypted: int = -1
 
+
+def bytes_to_b64(b: bytes) -> str:
+    return base64.b64encode(b).decode("ascii")
+
+def b64_to_bytes(s: str) -> bytes:
+    return base64.b64decode(s.encode("ascii"))
 
 def encrypt_data(data: str, n_blocks: int = 5) -> str:
     """
     Encrypt commitment data using timelock encryption.
-    
+
     Args:
         data: The data string to encrypt
         n_blocks: Number of blocks for timelock encryption (default: 5)
-    
+
     Returns:
         SHA256 hash of the encrypted bytes as a hex string
     """
-    encrypted_bytes = bittensor.extras.timelock.encrypt(
-        data=data.encode("utf-8"),
+
+    logger.info("D model hash", data = data)
+    encrypted_bytes, drand_round = bittensor.extras.timelock.encrypt(
+        data=data,
         n_blocks=n_blocks,
-    )[0]
-    logger.info("Encrypted commitment data", n_blocks=n_blocks)
-    return hashlib.sha256(encrypted_bytes).digest().hex()
+    )
+    logger.info("E timelock encrypted", data = encrypted_bytes)
+    encrypted_str = bytes_to_b64(encrypted_bytes)
+    logger.info("F timelock hex", data = encrypted_str)
+
+    return encrypted_str
 
 
-def decrypt_data(encrypted_hash: str, original_data: str | None = None) -> str:
+def is_decryption_ready(current_block: int, decrypt_block: int) -> bool:
+    """
+    Check if decryption is ready based on block numbers.
+
+    Args:
+        current_block: Current block number
+        decrypt_block: Block number when decryption becomes available (>= 0 means encrypted)
+
+    Returns:
+        True if decryption is ready, False otherwise
+    """
+    if not isinstance(decrypt_block, int):
+        return False
+
+    if decrypt_block < 0:
+        return True
+
+    return current_block >= decrypt_block
+
+
+def wait_for_decryption_block(subtensor: bittensor.Subtensor, decrypt_block: int) -> bool:
+    """
+    Wait until decryption block is reached.
+
+    Args:
+        current_block: Current block number
+        decrypt_block: Block number when decryption becomes available
+
+    Returns:
+        True if block was reached, False if decryption not pending
+    """
+    if is_decryption_ready(subtensor.block, decrypt_block):
+        return True
+
+    current_block = subtensor.block
+    blocks_to_wait = decrypt_block - subtensor.block
+    logger.info(
+        "Waiting for decryption block",
+        blocks_to_wait=blocks_to_wait,
+        current_block=current_block,
+        decrypt_block=decrypt_block,
+    )
+
+    # Wait before checking again
+    time.sleep(blocks_to_wait * 12)
+
+    return False
+
+
+def decrypt_data(encrypted_hash: str) -> str:
     """
     Decrypt commitment data using timelock decryption.
-    
+
     Args:
-        encrypted_hash: The encrypted hash or data to decrypt
-        original_data: Optional original data for verification
-    
+        encrypted_hash: The encrypted hash or data to decrypt (hex string)
+
     Returns:
         Decrypted data string, or the input hash if decryption fails
     """
     try:
-        decrypted = bittensor.extras.timelock.decrypt(encrypted_hash)
-        logger.info("Decrypted commitment data successfully")
+        encrypted_byte = bytes.fromhex(encrypted_hash)
+        decrypted = bittensor.extras.timelock.decrypt(encrypted_byte)
+        logger.info("Decrypted data successfully")
         return decrypted
+
     except Exception as e:
-        logger.warning("Failed to decrypt commitment data", error=str(e))
+        logger.warning("Failed to decrypt data", error=str(e))
         return encrypted_hash
+
+
+def decrypt_commit_fields(
+    status_dict: dict, current_block: int, field_name: str, wait_to_decrypt: bool = False
+) -> None:
+    """
+    Decrypt a field in a commitment dict if it is encrypted.
+
+    Args:
+        status_dict: The commitment dictionary to decrypt in-place
+        current_block: Current block number
+        field_name: Name of the field to decrypt (e.g., "model_hash", "miner_seed")
+        wait_to_decrypt: Whether to wait for decryption to become ready
+    """
+    # Decrypt field if it exists and is encrypted
+    if field_name in status_dict and status_dict[field_name]:
+        field_value = status_dict[field_name]
+        encrypted_block = status_dict.get("encrypted", -1)
+
+        # Check if decryption is ready
+        if not is_decryption_ready(current_block, encrypted_block) and wait_to_decrypt:
+            wait_for_decryption_block(current_block, encrypted_block)
+
+        print('decryopting status dict:', status_dict)
+        status_dict[field_name] = decrypt_data(field_value)
+
+    if status_dict.get("encrypted", -1) >= 0:
+        status_dict["encrypted"] = -1
+
+    return status_dict
 
 
 def commit_status(
@@ -118,29 +213,40 @@ def commit_status(
     # Serialize status first; same input for both plain + encrypted paths
     data_dict = status.model_dump()
 
-    if encrypted:
-        if "model_hash" in data_dict and data_dict["model_hash"]:
-            data_dict["model_hash"] = encrypt_data(data_dict["model_hash"], n_blocks=n_blocks)
-        data_dict["encrypted"] = True
-    
-    data = json.dumps(data_dict)
+    logger.info("B Preparing to commit status to chain model hash", data_dict=data_dict['model_hash'])
 
+    # if encrypted:
+    #     # Encrypt miner_seed for validator commits
+    #     if "miner_seed" in data_dict and data_dict["miner_seed"]:
+    #         data_dict["miner_seed"] = encrypt_data(str(data_dict["miner_seed"]), n_blocks=n_blocks)
+
+    #     if "model_hash" in data_dict and data_dict["model_hash"]:
+    #         data_dict["model_hash"] = encrypt_data(data_dict["model_hash"], n_blocks=n_blocks)
+
+    #     logger.info("C after encryption", data_dict=data_dict['model_hash'])
+
+    #     data_dict["encrypted"] = subtensor.block + n_blocks
+
+    data = json.dumps(data_dict)
+    logger.info("Committing status to chain", data_dict=data_dict)
     with _subtensor_lock:
         subtensor.set_commitment(
             wallet=wallet,
             netuid=config.chain.netuid,
             data=data,
+            raise_error=True
         )
-    return
+    return data_dict
 
 
 def get_chain_commits(
-    config: WorkerConfig, subtensor: bittensor.Subtensor
+    config: WorkerConfig, subtensor: bittensor.Subtensor, wait_to_decrypt: bool = False
 ) -> tuple[WorkerChainCommit, bittensor.Neuron]:
     with _subtensor_lock:
         all_commitments = subtensor.get_all_commitments(netuid=config.chain.netuid)
         metagraph = subtensor.metagraph(netuid=config.chain.netuid)
-    
+        current_block = subtensor.block
+
     parsed = []
 
     for hotkey, commit in all_commitments.items():
@@ -148,14 +254,16 @@ def get_chain_commits(
 
         try:
             status_dict = json.loads(commit)
-            
-            # Decrypt model_hash only if it appears to be encrypted (hex string of SHA256 hash)
-            if "model_hash" in status_dict and status_dict["model_hash"] :
-                model_hash = status_dict["model_hash"]
 
-                if status_dict.get("encrypted", False):
-                    status_dict["model_hash"] = decrypt_data(model_hash)
-                    status_dict["encrypted"] = False
+            # status_dict = decrypt_commit_fields(status_dict, current_block, "miner_seed", wait_to_decrypt)
+            # status_dict = decrypt_commit_fields(status_dict, current_block, "model_hash", wait_to_decrypt)
+
+            # if "signed_model_hash" in status_dict:
+            #     verify_message(
+            #         origin_hotkey_ss58=hotkey,
+            #         message=status_dict["model_hash"],
+            #         signature_hex=status_dict["signed_model_hash"],
+            #     )
 
             chain_commit = (
                 ValidatorChainCommit.model_validate(status_dict)
@@ -210,7 +318,11 @@ def scan_chain_for_new_model(
 
     max_model_version = max([getattr(c, "model_version", 0) for c, n in commits])
     if current_model_meta is not None:
-        logger.info("check model version", max_model_version = max_model_version, current_model_version = current_model_meta.global_ver)
+        logger.info(
+            "check model version",
+            max_model_version=max_model_version,
+            current_model_version=current_model_meta.global_ver,
+        )
         max_model_version = max(max_model_version, current_model_meta.global_ver)
 
     # 0) Download only from validator

@@ -51,6 +51,7 @@ class PhaseNames:
 
 def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_seconds: int = 5):
     should_submit = False
+    logger.info(f"Waiting for phase <{phase_name}> to begin...")
     while not should_submit:
         should_submit, blocks_till, phase_response = should_act(config, phase_name)
         if should_submit is False and blocks_till > 0:
@@ -59,9 +60,7 @@ def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_seconds
             check_time = datetime.now() + timedelta(seconds=sleep_sec)
             check_time_str = check_time.strftime("%H:%M:%S")
 
-            logger.info(
-                f"--Phase <{phase_name}> to begin in {blocks_till} blocks, check again at {check_time_str}"
-            )
+            logger.info(f"--Phase <{phase_name}> to begin in {blocks_till} blocks, check again at {check_time_str}")
             time.sleep(sleep_sec)
 
     logger.info(f"Phase <{phase_name}> has started, {phase_response.blocks_remaining_in_phase} blocks left in phase.")
@@ -194,8 +193,7 @@ def get_miners_from_commit(config, commits):
     miners: list[str] = [
         neuron.hotkey
         for commit, neuron in commits
-        if isinstance(commit, MinerChainCommit)
-        and getattr(commit, "expert_group", None) == config.task.expert_group_id
+        if isinstance(commit, MinerChainCommit) and getattr(commit, "expert_group", None) == config.task.expert_group_id
     ]
 
     return miners

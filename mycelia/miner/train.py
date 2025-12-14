@@ -228,7 +228,8 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
     inner_optimizer.zero_grad()
     try:
         for step, batch in enumerate(
-            iterable=train_dataloader, start=max(0, current_model_meta.inner_opt) * config.local_par.gradient_accumulation_steps
+            iterable=train_dataloader,
+            start=max(0, current_model_meta.inner_opt) * config.local_par.gradient_accumulation_steps,
         ):
             # for each step, we run 1 backward
             # for each inner_opt_step, we run local optimization; gradient_accumulation_steps = 1 real step
@@ -238,8 +239,14 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
             is_inner_optimizer_step = step % config.local_par.gradient_accumulation_steps == 0
             is_start_step = step == current_model_meta.inner_opt * config.local_par.gradient_accumulation_steps
 
-            logger.info("(0) Start epoch", step = step,  inner_opt_step = inner_opt_step, is_inner_optimizer_step = is_inner_optimizer_step, gradient_accumulation_steps = config.local_par.gradient_accumulation_steps)
-            
+            logger.info(
+                "(0) Start epoch",
+                step=step,
+                inner_opt_step=inner_opt_step,
+                is_inner_optimizer_step=is_inner_optimizer_step,
+                gradient_accumulation_steps=config.local_par.gradient_accumulation_steps,
+            )
+
             # === Training and inner optimization ===
             if (
                 not is_start_step
@@ -268,10 +275,10 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 # === Aggressively free intermediate tensors ===
                 del loss, aux_loss, batch_device, outputs
                 gc.collect()
-                
+
                 # === inner optimizer ===
                 if is_inner_optimizer_step:
-                    logger.info("--inner opt step", loss_batch = loss_batch, aux_loss = aux_loss_batch)
+                    logger.info("--inner opt step", loss_batch=loss_batch, aux_loss=aux_loss_batch)
 
                     for p in model.parameters():
                         if p.grad is None:
@@ -298,12 +305,12 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     # === Clear memory after optimizer step ===
                     torch.cuda.empty_cache()
                     gc.collect()
-                    logger.info("Memory cleared after optimizer step")            # === Log metric ===
+                    logger.info("Memory cleared after optimizer step")  # === Log metric ===
             if (
                 is_inner_optimizer_step
                 and inner_opt_step % max(round(config.local_par.global_opt_interval * 0.02), 1) == 0
             ):
-                logger.info("(2) Optimizer step", loss_batch = loss_batch, aux_loss_batch = aux_loss_batch)
+                logger.info("(2) Optimizer step", loss_batch=loss_batch, aux_loss_batch=aux_loss_batch)
                 metrics = get_status(
                     config=config,
                     model=model,
