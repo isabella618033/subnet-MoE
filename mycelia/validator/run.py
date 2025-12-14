@@ -335,8 +335,6 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                     model_version=global_opt_step,
                     expert_group=config.task.expert_group_id,
                     miner_seed=secrets.randbits(24),  # this should reveal later
-                    encrypt=True,
-                    n_block=max(0, subtensor.block - phase_end_block),
                 ),
             )
 

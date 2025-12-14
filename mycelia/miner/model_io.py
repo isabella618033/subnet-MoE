@@ -166,10 +166,7 @@ def commit_worker(
                 MinerChainCommit(
                     expert_group=config.task.expert_group_id,
                     model_hash=model_hash,
-                    # signed_model_hash=sign_message(origin_hotkey_ss58=wallet.hotkey, message=model_hash),
-                ),
-                encrypted=True,
-                n_blocks=n_blocks,
+                )
             )
             logger.info(f"Committed with hash: {commited_message}.")
         except FileNotReadyError as e:
