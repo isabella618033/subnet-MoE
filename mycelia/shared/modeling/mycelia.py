@@ -90,7 +90,6 @@ def get_base_model(
         return model
 
     # === STANDARD PATH (Miners) ===
-    logger.info("Loading in standard mode for miner")
     model = CustomQwen3NextForCausalLM(moe_config)
 
     if len(state_dicts) > 0:

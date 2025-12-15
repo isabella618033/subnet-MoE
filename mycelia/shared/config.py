@@ -184,7 +184,7 @@ class LoggingCfg(BaseConfig):
 
 class ValidatorCheckpointCfg(CheckpointCfg):
     base_checkpoint_path: Path = Path("checkpoints/validator")
-    miner_submission_path: Path = Path("checkpoints/validator/miner_submission")
+    miner_submission_path: Path = Path("miner_submission")
 
 
 class OwnerCheckpointCfg(CheckpointCfg):
@@ -290,8 +290,8 @@ class WorkerConfig(BaseConfig):
         self.task.base_path = self.run.root_path / self.task.base_path
         self.task.path = self.task.base_path / self.task.expert_group_name
 
-        if hasattr(self, "vali"):
-            self.ckpt.miner_submission_path = self.run.root_path / self.ckpt.miner_submission_path
+        if hasattr(self.ckpt, "miner_submission_path"):
+            self.ckpt.miner_submission_path = self.ckpt.base_checkpoint_path / self.ckpt.miner_submission_path
 
     def _fill_wallet_data(self):
         wallet = bittensor.Wallet(name=self.chain.coldkey_name, hotkey=self.chain.hotkey_name)

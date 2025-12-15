@@ -25,7 +25,7 @@ class SignedMessage:
 
 @dataclass
 class SignedDownloadRequestMessage(SignedMessage):
-    expert_group_id: int | None
+    expert_group_ids: list[int] | None
 
 
 @dataclass

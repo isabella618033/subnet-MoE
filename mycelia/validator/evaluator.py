@@ -16,7 +16,7 @@ logger = structlog.get_logger(__name__)
 # -----------------------------------------------------------------------------
 @dataclass(frozen=True)
 class MinerEvalJob:
-    uid: str
+    uid: int
     hotkey: str
     model_path: str
     step: int
@@ -62,7 +62,7 @@ async def evaluator_worker(
             gc.collect()
             torch.cuda.empty_cache()
 
-            logger.info(f"{name}: Evaluating uid={job.uid}")
+            logger.info(f"{name}: Evaluating hotkey={job.hotkey}")
 
             # Load model (potentially blocking) in a thread
             model = await asyncio.to_thread(load_model_from_path, job.model_path, base_model, device)

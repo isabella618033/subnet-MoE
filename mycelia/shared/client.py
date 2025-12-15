@@ -107,18 +107,15 @@ def submit_model(
         for k, v in extra_form.items():
             data[k] = v if isinstance(v, str | bytes) else str(v)
 
-    logger.info("Request payload prepared", extra_fields=list(extra_form.keys()) if extra_form else None)
-
     # --- retry loop for transient failures ---
     attempt = 0
     last_exc: Exception | None = None
 
     while attempt <= retries:
         try:
-            logger.info(f"Submission attempt {attempt + 1}/{retries + 1}")
             with open(model_path, "rb") as fh:
                 files = {"file": (os.path.basename(model_path), fh)}
-                logger.info("Uploading file to server", attempt=attempt + 1)
+                logger.info("Uploading file to server", attempt=attempt + 1, retires_left=retries - attempt)
                 resp: Response = requests.post(
                     url,
                     headers={"Authorization": f"Bearer {token}"},
@@ -202,7 +199,7 @@ def download_model(
     block: int,
     token: str,
     out: str | Path,
-    expert_group_id: int | None = None,
+    expert_group_ids: list[int] | None = [],
     resume: bool = False,
     timeout: int = 30,
 ):
@@ -219,7 +216,7 @@ def download_model(
     data = SignedDownloadRequestMessage(
         target_hotkey_ss58=target_hotkey_ss58,
         origin_hotkey_ss58=my_hotkey.ss58_address,
-        expert_group_id=expert_group_id,
+        expert_group_ids=expert_group_ids,
         block=block,
         signature=sign_message(my_hotkey, construct_block_message(target_hotkey_ss58, block=block)),
     ).to_dict()
@@ -245,7 +242,7 @@ def download_model(
         total = int(total) + start_at if total is not None else None
 
         downloaded = start_at
-        t0 = time()
+        t0 = time.time()
         last_print = t0
 
         with open(out, mode) as f:
@@ -255,7 +252,7 @@ def download_model(
                 f.write(chunk)
                 downloaded += len(chunk)
 
-                now = time()
+                now = time.time()
                 if now - last_print >= 0.5:
                     if total:
                         pct = downloaded / total * 100
@@ -280,7 +277,7 @@ def download_model(
             print(f"Warning: failed to extract zip archive {out}: {e}")
 
         # final line
-        elapsed = max(1e-6, time() - t0)
+        elapsed = max(1e-6, time.time() - t0)
         rate = (downloaded - start_at) / elapsed
         if total:
             bar = f"{human(downloaded)} / {human(total)} (100.0%)"

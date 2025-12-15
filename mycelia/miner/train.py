@@ -373,13 +373,14 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     data_loader=train_dataloader,
                     save_global_state=rank == 0,
                     rank=rank,
+                    save_model_by_expert_group = True,
                 )
 
-                if rank == 0:
-                    if config.ckpt.checkpoint_topk is not None:
-                        ckpt_deleted = delete_old_checkpoints(config.ckpt.checkpoint_path, config.ckpt.checkpoint_topk)
-                        if ckpt_deleted:
-                            logger.info(f"Deleted old checkpoints: {ckpt_deleted}")
+                
+                if config.ckpt.checkpoint_topk is not None:
+                    ckpt_deleted = delete_old_checkpoints(config.ckpt.checkpoint_path, config.ckpt.checkpoint_topk)
+                    if ckpt_deleted:
+                        logger.info(f"Deleted old checkpoints: {ckpt_deleted}")
 
                 logger.info("reached barrier, waiting for complete checkpoint saving")
                 dist.barrier(device_ids=[rank])

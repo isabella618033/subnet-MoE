@@ -132,7 +132,7 @@ def hash_model_bytes(model_bytes: bytes) -> bytes:
     """
     Blake2b-256 hash (32 bytes) of the model.
     """
-    return hashlib.blake2b(model_bytes, digest_size=32).digest()
+    return hashlib.blake2b(model_bytes, digest_size=24).digest()
 
 
 def get_model_hash(state):

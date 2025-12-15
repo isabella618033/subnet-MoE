@@ -33,8 +33,6 @@ def get_model_from_checkpoint(
         partial=(config.role == "miner"),
     ).to(config.model.device)
 
-    logger.info("Load base model for checkpoint")
-
     # load from checkpoint
     if get_nested_attr(config, "ckpt.resume_from_ckpt", False):
         resume, model_version, latest_checkpoint_path = start_model_from(

@@ -51,7 +51,7 @@ class PhaseNames:
 
 def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_seconds: int = 5):
     should_submit = False
-    logger.info(f"Waiting for phase <{phase_name}> to begin...")
+    logger.info(f"<{phase_name}> waiting to begin...")
     while not should_submit:
         should_submit, blocks_till, phase_response = should_act(config, phase_name)
         if should_submit is False and blocks_till > 0:
@@ -60,10 +60,10 @@ def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_seconds
             check_time = datetime.now() + timedelta(seconds=sleep_sec)
             check_time_str = check_time.strftime("%H:%M:%S")
 
-            logger.info(f"--Phase <{phase_name}> to begin in {blocks_till} blocks, check again at {check_time_str}")
+            logger.info(f"<{phase_name}> to begin in {blocks_till} blocks, check again at {check_time_str}")
             time.sleep(sleep_sec)
 
-    logger.info(f"Phase <{phase_name}> has started, {phase_response.blocks_remaining_in_phase} blocks left in phase.")
+    logger.info(f"<{phase_name}> has started, {phase_response.blocks_remaining_in_phase} blocks left in phase.")
     return should_submit, phase_response.phase_end_block
 
 
@@ -84,8 +84,8 @@ def search_model_submission_destination(
             assigned_validator_hotkey = validator
             break
 
-    with _subtensor_lock:
-        metagraph = subtensor.metagraph(netuid=config.chain.netuid)
+
+    metagraph = subtensor.metagraph(netuid=config.chain.netuid)
     uid = metagraph.hotkeys.index(assigned_validator_hotkey)
     return metagraph.axons[uid]
 
@@ -222,6 +222,17 @@ def get_blocks_until_next_phase(config: WorkerConfig) -> PhaseResponse:
     resp.raise_for_status()
     return resp.json()
 
+def get_blocks_from_previous_phase(config: WorkerConfig) -> PhaseResponse:
+    """
+    Determine current phase based on block schedule.
+
+    Returns:
+        str: one of ["training", "submission", "waiting"]
+    """
+    resp = requests.get(f"{config.cycle.owner_url}/previous_phase_blocks")
+    resp.raise_for_status()
+    return resp.json()
+
 
 def load_submission_files(folder: str = "miner_submission"):
     """
@@ -239,18 +250,19 @@ def load_submission_files(folder: str = "miner_submission"):
 
     return files_dict
 
-
 def gather_validation_job(config: ValidatorConfig, subtensor: bittensor.Subtensor, step: int) -> list[MinerEvalJob]:
     validator_miner_assignment = get_validator_miner_assignment(config, subtensor)
-    miner_assignment = validator_miner_assignment[config.chain.hotkey_ss58]
+    miner_assignment = validator_miner_assignment.get(config.chain.hotkey_ss58, [])
     miner_submission_files = load_submission_files(str(config.ckpt.miner_submission_path))
+    previous_phase_range = get_blocks_from_previous_phase(config)[PhaseNames.submission]
 
+    hotkeys = subtensor.metagraph(netuid=config.chain.netuid).hotkeys
     miner_jobs = []
     for file_name, submission_meta in miner_submission_files.items():
-        if submission_meta["hotkey"] in miner_assignment and get_phase(config).phase_name == PhaseNames.submission:
+        if submission_meta["hotkey"] in miner_assignment and submission_meta["block"] >= previous_phase_range[0] and submission_meta["block"] <= previous_phase_range[1] :
             miner_jobs.append(
                 MinerEvalJob(
-                    uid=submission_meta["uid"],
+                    uid = hotkeys.index(submission_meta["hotkey"]),
                     hotkey=submission_meta["hotkey"],
                     model_path=config.ckpt.miner_submission_path / file_name,
                     step=step,

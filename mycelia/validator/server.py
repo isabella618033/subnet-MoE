@@ -160,7 +160,7 @@ async def get_checkpoint(
         signature_hex=signature,
     )
 
-    resume, start_step, latest_checkpoint_path = get_resume_info(rank=0, config=config)
+    resume, model_meta, latest_checkpoint_path = get_resume_info(rank=0, config=config)
     logger.info("checkpoint, C", latest_checkpoint_path)
 
     if not latest_checkpoint_path:
@@ -170,7 +170,7 @@ async def get_checkpoint(
     if expert_group_ids is None:
         latest_checkpoint_path = os.path.join(latest_checkpoint_path, "model.pt")
         logger.info(f"checkpoint, last {latest_checkpoint_path}")
-        result = file_response_for(Path(latest_checkpoint_path), f"step{start_step}")
+        result = file_response_for(Path(latest_checkpoint_path), f"step{model_meta.global_ver}")
         return result
 
     else:
@@ -179,7 +179,7 @@ async def get_checkpoint(
         expert_group_ids.sort()
 
         # Deterministic zip name for this combination of groups + step
-        zip_name = f"expert_group_step{start_step}_{','.join(str(x) for x in expert_group_ids)}.zip"
+        zip_name = f"expert_group_step{model_meta.global_ver}_{','.join(str(x) for x in expert_group_ids)}.zip"
         zip_path = os.path.join(ckpt_dir, zip_name)
 
         # If the zip already exists, skip re-creating it
@@ -233,9 +233,6 @@ async def submit_checkpoint(
     authorization: str | None = Header(default=None),
     target_hotkey_ss58: str = Form(None, description="Receiver's hotkey"),
     origin_hotkey_ss58: str = Form(None, description="Sender's hotkey"),
-    block: int = Form(
-        None, description="The block that the message was sent."
-    ),  # insecure, do not use this field for validation, TODO: change it to block hash?
     signature: str = Form(None, description="Signed message"),
     file: UploadFile = File(..., description="The checkpoint file, e.g. model.pt"),
 ):
@@ -261,9 +258,8 @@ async def submit_checkpoint(
         raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
 
     # Stream write + compute SHA256
-    with _subtensor_lock:
-        block = subtensor.block
-    model_name = f"hotkey_{target_hotkey_ss58}_block_{block}.pt"
+    block = subtensor.block
+    model_name = f"hotkey_{origin_hotkey_ss58}_block_{block}.pt"
     hasher = hashlib.sha256()
     bytes_written = 0
     dest_path = config.ckpt.miner_submission_path / model_name
@@ -298,7 +294,7 @@ async def submit_checkpoint(
 
     logger.info(f"Verified submission at {dest_path}.")
 
-    ckpt_deleted = delete_old_checkpoints_by_hotkey(config.ckpt.checkpoint_path)
+    delete_old_checkpoints_by_hotkey(config.ckpt.miner_submission_path)
 
     return {
         "status": "ok",

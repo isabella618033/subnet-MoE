@@ -5,6 +5,7 @@ import hashlib
 import json
 import threading
 import time
+import traceback
 from collections import Counter
 from pathlib import Path
 
@@ -45,11 +46,13 @@ class ValidatorChainCommit(BaseModel):
     model_hash: str | None = None
     model_version: int | None = None
     expert_group: int | None = None
-    miner_seed: int | None = None  # encryt(seed)
+    miner_seed: int | None = None
+    block: int | None = None
 
 class MinerChainCommit(BaseModel):
+    block: int
     expert_group: int | None = None
-    model_hash: str | None = None  # encrypt(hash)
+    model_hash: str | None = None
 
 def commit_status(
     config: WorkerConfig,
@@ -76,27 +79,25 @@ def commit_status(
     # Serialize status first; same input for both plain + encrypted paths
     data_dict = status.model_dump()
 
-    logger.info("B Preparing to commit status to chain model hash", data_dict=data_dict['model_hash'])
-
     data = json.dumps(data_dict)
-    logger.info("Committing status to chain", data_dict=data_dict)
-    with _subtensor_lock:
-        subtensor.set_commitment(
-            wallet=wallet,
-            netuid=config.chain.netuid,
-            data=data,
-            raise_error=True
-        )
+
+    subtensor.set_commitment(
+        wallet=wallet,
+        netuid=config.chain.netuid,
+        data=data,
+        raise_error=True
+    )
+
+    logger.info("Committed status to chain", status=data_dict)
     return data_dict
 
 
 def get_chain_commits(
     config: WorkerConfig, subtensor: bittensor.Subtensor, wait_to_decrypt: bool = False
 ) -> tuple[WorkerChainCommit, bittensor.Neuron]:
-    with _subtensor_lock:
-        all_commitments = subtensor.get_all_commitments(netuid=config.chain.netuid)
-        metagraph = subtensor.metagraph(netuid=config.chain.netuid)
-        current_block = subtensor.block
+
+    all_commitments = subtensor.get_all_commitments(netuid=config.chain.netuid)
+    metagraph = subtensor.metagraph(netuid=config.chain.netuid)
 
     parsed = []
 
@@ -167,8 +168,9 @@ def scan_chain_for_new_model(
         max_model_version = max(max_model_version, current_model_meta.global_ver)
 
     # 0) Download only from validator
-    commits = [(c, n) for c, n in commits if n.validator_permit]
-    commits = [c for c in commits if getattr(c, "model_hash", False)]
+    # commits = [(c, n) for c, n in commits if n.validator_permit]
+    commits = [(c, n) for c, n in commits if getattr(c, "miner_seed", False)]
+    commits = [(c, n) for c, n in commits if getattr(c, "model_hash", False)]
 
     # 1) collect candidates that are newer than the current version
     most_updated_commits = [(c, n) for c, n in commits if getattr(c, "model_version", 0) >= max_model_version]
@@ -243,17 +245,17 @@ def fetch_model_from_chain(
 
                 # Output path (reload each attempt so block height is fresh)
                 out_path = Path(config.ckpt.validator_checkpoint_path) / (
-                    f"uid_{download_meta.get('uid')}_hotkey_{download_meta.get('hotkey')}_globalver_{download_meta.get('model_version')}_block_{subtensor.block}.pt"
+                    f"uid_{download_meta.get('uid')}_hotkey_{download_meta.get('hotkey')}_globalver_{download_meta.get('model_version')}_expgroup_{config.task.expert_group_id}_block_{subtensor.block}.pt"
                 )
 
                 try:
                     download_model(
                         url=url,
                         my_hotkey=wallet.hotkey,  # type: ignore
-                        target_hotkey_ss58=download_meta["target_hotksy_ss58"],
+                        target_hotkey_ss58=download_meta["target_hotkey_ss58"],
                         block=subtensor.block,
-                        expert_group_id=config.expert_group_id,
-                        token=getattr(config.miner, "token", ""),
+                        expert_group_ids=[config.task.expert_group_id],
+                        token=getattr(config.cycle, "token", ""),
                         out=out_path,
                     )
                     # If download_model doesn't raise, consider it a success
@@ -267,8 +269,9 @@ def fetch_model_from_chain(
                         current_model_hash=current_model_hash,
                     )
                     return download_meta
-                except Exception:
-                    logger.warning("Download failed", url)
+                except Exception as e:
+                    logger.warning("Download failed", url, e)
+                    traceback.print_exc()
 
             if not download_success:
                 retries += 1
@@ -278,6 +281,6 @@ def fetch_model_from_chain(
                     time.sleep(delay)
 
         if not download_success:
-            logger.error("❌ All download attempts failed after %d retries.", retries)
+            logger.error(f"❌ All download attempts failed after {retries} retries.")
 
             return None

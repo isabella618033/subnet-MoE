@@ -68,14 +68,16 @@ def start_model_from(
             "secondary checkpoint not found, using primary",
             primary_ckpt_path=primary_ckpt_path,
             secondary_ckpt_path=secondary_ckpt_path,
+            model_meta = primary_model_meta
         )
         return primary_ckpt_found, primary_model_meta, latest_primary_ckpt
 
     if not primary_ckpt_found and latest_secondary_ckpt is not None:
         logger.info(
-            "primary checkpoint not found, using secoundary",
+            "primary checkpoint not found, using secondary",
             primary_ckpt_path=primary_ckpt_path,
             secondary_ckpt_path=secondary_ckpt_path,
+            model_meta = secondary_model_meta
         )
         return secondary_ckpt_found, secondary_model_meta, latest_secondary_ckpt
 
@@ -444,7 +446,7 @@ def get_sorted_checkpoints(checkpoint_path: str) -> dict[ModelMeta]:
 
         # ensure both fields exist and are numeric
         model_meta = ModelMeta(
-            global_ver=int(meta.get("globalver") or -1), inner_opt=int(meta.get("inneropt") or -1), path=Path(f)
+            global_ver=int(meta.get("globalver", -1)), inner_opt=int(meta.get("inneropt", -1)), path=Path(f)
         )
         ckpt_files.append(model_meta)
 

@@ -4,6 +4,8 @@ from enum import Enum, auto
 from queue import Queue
 from threading import Lock, Thread
 
+import bittensor
+
 from mycelia.shared.app_logging import configure_logging, structlog
 from mycelia.shared.chain import MinerChainCommit, _subtensor_lock, commit_status
 from mycelia.shared.checkpoint import (
@@ -76,7 +78,6 @@ def scheduler_service(
 
         # --------- SUBMISSION SCHEDULING ---------
         wait_till(config, phase_name=PhaseNames.submission, poll_fallback_seconds=poll_fallback_seconds)
-        logger.info("A submission phase started, enqueue submit job")
         submit_queue.put(Job(job_type=JobType.SUBMIT))
 
 
@@ -91,6 +92,7 @@ def download_worker(
     """
     Consumes DOWNLOAD jobs and runs the download phase logic.
     """
+    subtensor = bittensor.Subtensor(config.chain.network)
     while True:
         job = download_queue.get()
         try:
@@ -103,12 +105,14 @@ def download_worker(
                 ModelMeta(global_ver=current_model_version, model_hash=current_model_hash), config, subtensor, wallet
             )
 
+            logger.info(f"<{PhaseNames.distribute}> downloaded model metadata from chain: {download_meta}.")
+
             if (
                 not isinstance(download_meta, dict)
                 or "model_version" not in download_meta
                 or "model_hash" not in download_meta
             ):
-                raise FileNotReadyError(f"download_meta from chain is not ready/invalid: {download_meta}")
+                raise FileNotReadyError(f"No successful download: {download_meta}")
 
             # Update shared state with new version/hash
             with shared_state.lock:
@@ -121,27 +125,27 @@ def download_worker(
             )
 
         except FileNotReadyError as e:
-            logger.warning(f"[download_worker] File not ready error: {e}")
+            logger.warning(f"<{PhaseNames.distribute}> File not ready error: {e}")
 
         except Exception as e:
-            logger.error(f"[download_worker] Error while handling job: {e}")
+            logger.error(f"<{PhaseNames.distribute}> Error while handling job: {e}")
             traceback.print_exc()
 
         finally:
             download_queue.task_done()
-            logger.info(f"Phase <{PhaseNames.distribute}> obligation completed.")
+            logger.info(f"<{PhaseNames.distribute}> obligation completed.")
 
 
 def commit_worker(
     config,
     commit_queue: Queue,
     wallet,
-    subtensor,
     shared_state: SharedState,
 ):
     """
     Consumes COMMIT model and runs the submission phase logic.
     """
+    subtensor = bittensor.Subtensor(config.chain.network)
     while True:
         job = commit_queue.get()
         try:
@@ -155,64 +159,59 @@ def commit_worker(
 
             model_path = f"{latest_checkpoint_path}/model.pt"
             model_hash = get_model_hash(compile_full_state_dict_from_path(model_path)).hex()
-            with _subtensor_lock:
-                current_block = subtensor.block
 
-            n_blocks = max(1, job.phase_end_block - current_block)  # Ensure positive
-            commited_message = commit_status(
+            commit_status(
                 config,
                 wallet,
                 subtensor,
                 MinerChainCommit(
                     expert_group=config.task.expert_group_id,
                     model_hash=model_hash,
+                    block=subtensor.block
                 )
             )
-            logger.info(f"Committed with hash: {commited_message}.")
+        
         except FileNotReadyError as e:
-            logger.warning(f"[commit_worker] File not ready error: {e}")
+            logger.warning(f"<{PhaseNames.commit}> File not ready error: {e}")
 
         except Exception as e:
-            logger.error(f"[commit_worker] Error while handling job: {e}")
+            logger.error(f"<{PhaseNames.commit}> Error while handling job: {e}")
             traceback.print_exc()
 
         finally:
             commit_queue.task_done()
-            logger.info(f"Phase <{PhaseNames.commit}> obligation completed.")
+            logger.info(f"<{PhaseNames.commit}> completed.")
 
 
 def submit_worker(
     config,
     submit_queue: Queue,
     wallet,
-    subtensor,
     shared_state: SharedState,
 ):
     """
     Consumes SUBMIT jobs and runs the submission phase logic.
     """
+    subtensor = bittensor.Subtensor(config.chain.network)
     while True:
         job = submit_queue.get()
-        logger.info("B submit_worker picked up a job")
+
         try:
-            logger.info("C submit_worker acquiring lock to read latest_checkpoint_path")
+  
             with shared_state.lock:
                 latest_checkpoint_path = shared_state.latest_checkpoint_path
 
-            logger.info("D submit_worker released lock after reading latest_checkpoint_path")
+        
             if latest_checkpoint_path is None:
                 raise FileNotReadyError("Not checkpoint found, skip submission.")
 
-            logger.info("E submit_worker searching for model submission destination")
-            with _subtensor_lock:
-                destination_axon = search_model_submission_destination(
-                    wallet=wallet,
-                    config=config,
-                    subtensor=subtensor,
-                )
-                block = subtensor.block
+            destination_axon = search_model_submission_destination(
+                wallet=wallet,
+                config=config,
+                subtensor=subtensor,
+            )
+            block = subtensor.block
 
-            logger.info("F submit_worker found destination, submitting model")
             submit_model(
                 url=f"http://{destination_axon.ip}:{destination_axon.port}/submit-checkpoint",
                 token="",
@@ -222,20 +221,22 @@ def submit_worker(
                 model_path=f"{latest_checkpoint_path}/model.pt",
             )
 
+            logger.info(f"<{PhaseNames.submission}> submitted model to {destination_axon.hotkey} at block {block}.")
+        
         except FileNotReadyError as e:
-            logger.warning(f"[submit_worker] File not ready error: {e}")
+            logger.warning(f"<{PhaseNames.submission}> File not ready error: {e}")
 
         except Exception as e:
-            logger.error(f"[submit_worker] Error while handling job: {e}")
+            logger.error(f"<{PhaseNames.submission}> Error while handling job: {e}")
             traceback.print_exc()
 
         finally:
             submit_queue.task_done()
-            logger.info(f"Phase <{PhaseNames.submission}> obligation completed.")
+            logger.info(f"<{PhaseNames.submission}> obligation completed.")
 
 
 # --- Wiring it all together ---
-def run_system(config, wallet, subtensor, current_model_version: int = -1, current_model_hash: str = "xxx"):
+def run_system(config, wallet, current_model_version: int = -1, current_model_hash: str = "xxx"):
     download_queue = Queue()
     commit_queue = Queue()
     submit_queue = Queue()
@@ -250,13 +251,13 @@ def run_system(config, wallet, subtensor, current_model_version: int = -1, curre
 
     Thread(
         target=commit_worker,
-        args=(config, commit_queue, wallet, subtensor, shared_state),
+        args=(config, commit_queue, wallet, shared_state),
         daemon=True,
     ).start()
 
     Thread(
         target=submit_worker,
-        args=(config, submit_queue, wallet, subtensor, shared_state),
+        args=(config, submit_queue, wallet, shared_state),
         daemon=True,
     ).start()
 
@@ -279,6 +280,6 @@ if __name__ == "__main__":
 
     config.write()
 
-    wallet, subtensor = setup_chain_worker(config)
+    wallet, _ = setup_chain_worker(config)
 
-    run_system(config, wallet, subtensor)
+    run_system(config, wallet)

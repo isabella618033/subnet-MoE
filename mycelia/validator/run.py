@@ -299,7 +299,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
         wallet,
         subtensor,
         ValidatorChainCommit(
-            model_hash="xxx",
+            model_hash=None,
             model_version=global_opt_step,
             expert_group=config.task.expert_group_id,
             miner_seed=0,  # this should reveal later
@@ -314,7 +314,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
 
     outer_optimizer.zero_grad()
 
-    current_model_hash = "xxx"
+    current_model_hash = None
 
     try:
         while True:
@@ -334,7 +334,8 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                     model_hash=current_model_hash,
                     model_version=global_opt_step,
                     expert_group=config.task.expert_group_id,
-                    miner_seed=secrets.randbits(24),  # this should reveal later
+                    miner_seed=secrets.randbits(16),
+                    block = subtensor.block
                 ),
             )
 
@@ -404,7 +405,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
 
             # === save checkpoint ===
             logger.info("(7) Saving checkpoint")
-            ckpt_path = config.ckpt.checkpoint_path / f"globalopt_{int(global_opt_step)}"
+            ckpt_path = config.ckpt.checkpoint_path / f"globalver_{int(global_opt_step)}"
 
             save_checkpoint(
                 checkpoint_path=ckpt_path,
@@ -430,14 +431,15 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                     model_version=global_opt_step,
                     expert_group=config.task.expert_group_id,
                     miner_seed=0,
+                    block=subtensor.block,
                 ),
             )
 
-            if rank == 0:
-                if config.ckpt.checkpoint_topk is not None:
-                    ckpt_deleted = delete_old_checkpoints(config.ckpt.checkpoint_path, config.ckpt.checkpoint_topk)
-                    if ckpt_deleted:
-                        logger.info(f"Deleted old checkpoints: {ckpt_deleted}")
+            
+            if config.ckpt.checkpoint_topk is not None:
+                ckpt_deleted = delete_old_checkpoints(config.ckpt.checkpoint_path, config.ckpt.checkpoint_topk)
+                if ckpt_deleted:
+                    logger.info(f"Deleted old checkpoints: {ckpt_deleted}")
 
             # === validation and log metric ===
             logger.info("(8) Start local evaluation")
