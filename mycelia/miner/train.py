@@ -311,8 +311,8 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                     training_start_time = None
 
                     # === Clear memory after optimizer step ===
-                    torch.cuda.empty_cache()
                     gc.collect()
+                    torch.cuda.empty_cache()
                     logger.info("Memory cleared after optimizer step")  # === Log metric ===
             if (
                 is_inner_optimizer_step

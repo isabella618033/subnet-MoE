@@ -105,8 +105,10 @@ def download_worker(
                 secondary_ckpt_path=config.ckpt.checkpoint_path,
             )
 
+            current_model_meta.model_hash = current_model_hash
+
             download_meta = fetch_model_from_chain(
-                ModelMeta(global_ver=current_model_meta, model_hash=current_model_hash),
+                current_model_meta,
                 config,
                 subtensor,
                 wallet,
@@ -131,8 +133,8 @@ def download_worker(
             )
 
             with shared_state.lock:
-                shared_state.current_model_version = current_model_meta["model_version"]
-                shared_state.current_model_hash = current_model_meta["model_hash"]
+                shared_state.current_model_version = current_model_meta.model_version
+                shared_state.current_model_hash = current_model_meta.model_hash
 
             delete_old_checkpoints(
                 config.ckpt.validator_checkpoint_path,
