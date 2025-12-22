@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from functools import partial
 
@@ -10,9 +9,16 @@ from torch.utils.data import IterableDataset as TorchIterableDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import DataCollator, DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
+from mycelia.shared.app_logging import structlog
 from mycelia.shared.helper import h256_int, import_from_string
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
+
+
+def _fractional_index_filter(_example, idx: int, seed: str, threshold: int) -> bool:
+    """Deterministically decide whether to keep a sample based on its streaming index."""
+    score = h256_int("dataset_selection", str(idx), seed)
+    return score <= threshold
 
 
 # -----------------------------
@@ -43,8 +49,13 @@ class DefaultStreamingTorchDataset(TorchIterableDataset):
         self.seq_length = seq_length
 
     def __iter__(self):
-        format_fn_partial = partial(self.tokenize_and_format, tokenizer=self.tokenizer, sequence_length=self.seq_length)
-        return iter(self.hf_iterable.map(format_fn_partial, remove_columns=self.hf_iterable.column_names))
+        format_example = partial(self.tokenize_and_format, tokenizer=self.tokenizer, sequence_length=self.seq_length)
+
+        # Explicit per-example iteration avoids surprises with HF's streaming `map` api (which
+        # can leave original string columns attached when `column_names` is missing), ensuring
+        # we only yield the tokenized dict expected by the collator.
+        for example in self.hf_iterable:
+            yield format_example(example)
 
     @staticmethod
     def tokenize_and_format(
@@ -90,14 +101,12 @@ class DefaultStreamingTorchDataset(TorchIterableDataset):
             max_int = 2**256 - 1
             threshold = int(max_int * fraction)
 
-            def _keep(_, idx: int) -> bool:
-                # Deterministic score based on (idx, seed).
-                # You can switch to using a sample field instead of idx if desired.
-                score = h256_int("dataset_selection", str(idx), seed)
-                return score <= threshold
+            logger.info("Applying fractional subsampling", seed=seed, fraction=fraction, threshold=threshold)
 
             # `with_indices=True` gives us a stable index per element in the stream.
-            split = split.filter(_keep, with_indices=True)
+            # Wrap with partial instead of relying on fn_kwargs to keep worker execution simple.
+            filter_fn = partial(_fractional_index_filter, seed=seed, threshold=threshold)
+            split = split.filter(filter_fn, with_indices=True)
 
         # Shard across processes if rank/world_size are provided.
         # split_dataset_by_node works with streaming datasets and avoids overlapping samples.
@@ -123,7 +132,7 @@ class DefaultStreamingTorchDataset(TorchIterableDataset):
 def get_dataloader(
     config,
     tokenizer: PreTrainedTokenizerBase,
-    seed: int = None,
+    seed: int = 0,
     rank: int | None = None,
     world_size: int | None = None,
     train: bool = True,
@@ -155,6 +164,7 @@ def get_dataloader(
     Optional[StatefulDataLoader]
         A stateful dataloader for the requested split, or None if the eval split is missing.
     """
+    logger.info("get_dataloader", train=train, seed=seed)
     # Prefer provided rank/world_size, else fall back to config (if present), else no sharding.
     world_size = world_size if world_size is not None else config.task.data.world_size
     rank = rank if rank is not None else config.task.data.rank

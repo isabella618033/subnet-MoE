@@ -29,7 +29,7 @@ from mycelia.shared.config import MinerConfig, parse_args
 from mycelia.shared.dataloader import get_dataloader
 from mycelia.shared.evaluate import evaluate_model
 from mycelia.shared.expert_manager import ExpertManager
-from mycelia.shared.helper import get_nested_attr
+from mycelia.shared.helper import get_model_hash, get_nested_attr
 from mycelia.shared.metrics import MetricLogger
 from mycelia.shared.model import freeze_parameters, load_model
 from mycelia.shared.modeling.mycelia import get_base_tokenizer
@@ -118,7 +118,6 @@ def setup_training(
         - If `resume_from_ckpt` is set and a checkpoint is found, model/opt/scheduler/scaler states are restored
           before syncing `global_model` from `model`.
     """
-
     logger.info("(0) Setup training")
 
     # === model & Experts manager ===
@@ -126,11 +125,12 @@ def setup_training(
     expert_manager = ExpertManager(config)
     model, model_meta = load_model(rank, config, expert_manager, subtensor, wallet)
     model = model.to(device)
-    model = freeze_parameters(model = model, expert_manager = expert_manager, expert_group_id=config.task.expert_group_id)
+    model = freeze_parameters(model=model, expert_manager=expert_manager, expert_group_id=config.task.expert_group_id)
 
     # === optimizers ===
     logger.info(f"init - optimizer")
-    inner_optimizer = torch.optim.AdamW(model.named_parameters(), lr=config.opt.lr, weight_decay=0.1, betas=(0.9, 0.95))
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    inner_optimizer = torch.optim.AdamW(trainable_params, lr=config.opt.lr, weight_decay=0.1, betas=(0.9, 0.95))
 
     # === scheduler === (for inner optimizer)
     logger.info(f"init - scheduler")
@@ -179,6 +179,19 @@ def setup_training(
         train_dataloader,
         model_meta,
     )
+
+
+def sum_model_gradients(model):
+    """
+    Returns the sum of absolute gradients of all model parameters.
+    Assumes backward() has already been called.
+    """
+    with torch.no_grad():
+        total = 0.0
+        for param in model.parameters():
+            if param.grad is not None:
+                total += param.grad.abs().sum().item()
+        return total
 
 
 def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
@@ -270,13 +283,13 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
                 with torch.amp.autocast("cuda", dtype=torch.float16):
                     outputs = model(**batch_device)
-
                     loss = outputs.loss / config.local_par.gradient_accumulation_steps
                     # aux_loss = outputs.aux_loss / config.local_par.gradient_accumulation_steps if outputs.aux_loss is not None else torch.tensor(0)
                     aux_loss = torch.tensor(0)
 
-                loss_batch += loss.detach()
-                aux_loss_batch += aux_loss.detach()
+                loss_batch += loss.item()
+                aux_loss_batch += aux_loss.item()
+                logger.info("traing", loss = loss, grad_sum=sum_model_gradients(model))
 
                 inner_scaler.scale(loss).backward()
 
@@ -284,41 +297,66 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 del loss, aux_loss, batch_device, outputs
                 gc.collect()
 
-                # === inner optimizer ===
-                if is_inner_optimizer_step:
-                    logger.info("inner optimizer step", loss_batch=loss_batch, aux_loss=aux_loss_batch)
+            # === inner optimizer ===
+            if not is_start_step and is_inner_optimizer_step:
+                old_model_hash = get_model_hash(model.state_dict())
 
-                    for p in model.parameters():
-                        if p.grad is None:
-                            continue
-                        dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
-                        p.grad.div_(world_size)
+                for n, p in model.named_parameters():
+                    if p.grad is None or torch.isnan(p.grad.sum()):
+                        continue
+                    # dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+                    p.grad.div_(world_size)
 
-                    inner_scaler.unscale_(optimizer=inner_optimizer)
+                inner_scaler.unscale_(optimizer=inner_optimizer)
 
-                    clip_grad_norm_(model.parameters(), 1.0)  # gradient clipping
+                grad_norm = clip_grad_norm_([p for p in model.parameters() if p.grad is not None and not torch.isnan(p.grad.sum())], 1.0)  # gradient clipping # <- turned grad to nan
 
-                    inner_scaler.step(inner_optimizer)
+                scale_before = inner_scaler.get_scale() if inner_scaler.is_enabled() else None
+                step_result = inner_scaler.step(inner_optimizer)
+                step_skipped = inner_scaler.is_enabled() and step_result is None
 
-                    inner_scaler.update()
+                if step_skipped:
+                    logger.warning(
+                        "GradScaler skipped optimizer step due to inf/NaN gradients",
+                        grad_norm=float(grad_norm),
+                        scale_before=scale_before,
+                    )
+                else:
+                    logger.info(
+                        "Optimizer step applied",
+                        grad_norm=float(grad_norm),
+                        scale_before=scale_before,
+                    )
 
-                    scheduler.step()
+                inner_scaler.update()
+                if inner_scaler.is_enabled():
+                    logger.info(
+                        "Scaler updated",
+                        scale_after=inner_scaler.get_scale(),
+                    )
 
-                    inner_optimizer.zero_grad()
+                scheduler.step()
 
-                    training_time = time.time() - training_start_time
-                    total_training_time += training_time
-                    training_start_time = None
+                inner_optimizer.zero_grad()
 
-                    # === Clear memory after optimizer step ===
-                    gc.collect()
-                    torch.cuda.empty_cache()
-                    logger.info("Memory cleared after optimizer step")  # === Log metric ===
+                training_time = time.time() - training_start_time
+                total_training_time += training_time
+                training_start_time = None
+
+                # === Clear memory after optimizer step ===
+                gc.collect()
+                torch.cuda.empty_cache()
+                logger.info("Memory cleared after optimizer step")
+
+                new_model_hash = get_model_hash(model.state_dict())
+                logger.info(f"Updated model", old_model_hash=old_model_hash, new_model_hash=new_model_hash)
+
+            # === Log metric ===
             if (
                 is_inner_optimizer_step
                 and inner_opt_step % max(round(config.local_par.global_opt_interval * 0.02), 1) == 0
             ):
-                logger.info("(2) Optimizer step", loss_batch=loss_batch, aux_loss_batch=aux_loss_batch)
+                logger.info("(2) Logging step", loss_batch=loss_batch, aux_loss_batch=aux_loss_batch)
                 metrics = get_status(
                     config=config,
                     model=model,
@@ -358,7 +396,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 metric_logger.log(metrics)
 
                 logger.info("reached barrier, waiting for partial validation and metric logging to complete")
-                dist.barrier(device_ids=[rank])
+                # dist.barrier(device_ids=[rank])
 
             # === save checkpoint ===
             if (
@@ -367,8 +405,10 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 and inner_opt_step % config.ckpt.checkpoint_interval == 0
             ):
                 logger.info("(4) Saving checkpoint")
+
                 ckpt_path = os.path.join(
-                    config.ckpt.checkpoint_path, f"globalver_{current_model_meta.global_ver}_inneropt_{inner_opt_step}"
+                    config.ckpt.checkpoint_path,
+                    f"globalver_{current_model_meta.global_ver}_inneropt_{inner_opt_step}",
                 )
 
                 save_checkpoint(
@@ -391,42 +431,53 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                         logger.info(f"Deleted old checkpoints: {ckpt_deleted}")
 
                 logger.info("reached barrier, waiting for complete checkpoint saving")
-                dist.barrier(device_ids=[rank])
+                # dist.barrier(device_ids=[rank])
 
             # === reload model ===
-            if (
-                is_inner_optimizer_step
-                and start_model_from(
+            if is_inner_optimizer_step:
+                logger.info("(5) Reload Model")
+
+                newest_checkpoint = start_model_from(
                     rank,
                     config,
                     primary_ckpt_path=config.ckpt.validator_checkpoint_path,
                     secondary_ckpt_path=config.ckpt.checkpoint_path,
                 )[1]
-                > current_model_meta
-            ):
-                logger.info("(5) Reload Model")
-                dist.barrier(device_ids=[rank])  # make sure everything is saved and everyone is ready to load
-                logger.info("freeing cuda memory")
-                free_cuda_models(models=[model], optimizers=[inner_optimizer], devices=[device])
-                logger.info(
-                    "restarting model",
-                    current_model_meta=current_model_meta,
-                    largest_avail_model=start_model_from(
-                        rank,
-                        config,
-                        primary_ckpt_path=config.ckpt.validator_checkpoint_path,
-                        secondary_ckpt_path=config.ckpt.checkpoint_path,
-                    )[1],
-                )
-                (
-                    model,
-                    inner_optimizer,
-                    inner_scaler,
-                    scheduler,
-                    expert_manager,
-                    train_dataloader,
-                    current_model_version,
-                ) = setup_training(config, rank, device, tokenizer, subtensor, wallet, current_model_meta)
+
+                if newest_checkpoint > current_model_meta:
+                    logger.info(
+                        "Should reload model",
+                        newest_checkpoint=newest_checkpoint,
+                        current_model_meta=current_model_meta,
+                    )
+                    # dist.barrier(device_ids=[rank])  # make sure everything is saved and everyone is ready to load
+                    logger.info("freeing cuda memory")
+                    free_cuda_models(models=[model], optimizers=[inner_optimizer], devices=[device])
+                    logger.info(
+                        "restarting model",
+                        current_model_meta=current_model_meta,
+                        largest_avail_model=start_model_from(
+                            rank,
+                            config,
+                            primary_ckpt_path=config.ckpt.validator_checkpoint_path,
+                            secondary_ckpt_path=config.ckpt.checkpoint_path,
+                        )[1],
+                    )
+                    (
+                        model,
+                        inner_optimizer,
+                        inner_scaler,
+                        scheduler,
+                        expert_manager,
+                        train_dataloader,
+                        current_model_version,
+                    ) = setup_training(config, rank, device, tokenizer, subtensor, wallet, current_model_meta)
+                else:
+                    logger.info(
+                        "No need to reload model",
+                        newest_checkpoint=newest_checkpoint,
+                        current_model_meta=current_model_meta,
+                    )
 
             # === Clean up ===
             if is_inner_optimizer_step:
@@ -435,6 +486,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 aux_loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
                 gc.collect()
                 torch.cuda.empty_cache()
+                logger.info("Clean up completed")
 
     except Exception:
         logger.error("Quit training", exc_info=True)

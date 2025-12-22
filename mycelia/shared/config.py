@@ -98,7 +98,7 @@ class ModelCfg(BaseConfig):
     # although we are calling a large model here, but we would only be training a partial of it for each miner
     model_path: str = "Qwen/Qwen3-Next-80B-A3B-Thinking"
     foundation: bool = True
-    torch_compile: bool = True
+    torch_compile: bool = False
     attn_implementation: str = "sdpa"
     precision: str = "fp16-mixed"
     device: str = "cuda"
@@ -156,7 +156,7 @@ class ParallelismCfg(BaseConfig):  # parallelism for local training
 
 
 class ScheduleCfg(BaseConfig):
-    warmup_steps: PositiveInt = 600
+    warmup_steps: int = 600
     total_steps: PositiveInt = 88_000
     # Derived defaults for intervals set in Checkpoint/Logging via global_opt_interval
 

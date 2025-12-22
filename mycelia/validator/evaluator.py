@@ -66,7 +66,9 @@ async def evaluator_worker(
 
             # Load model (potentially blocking) in a thread
             model = await asyncio.to_thread(load_model_from_path, job.model_path, base_model, device)
-            eval_dataloader = await asyncio.to_thread(get_dataloader, config, tokenizer, combinded_seed, 0, 10)
+            eval_dataloader = await asyncio.to_thread(
+                get_dataloader, config=config, tokenizer=tokenizer, seed=combinded_seed, rank=0, world_size=10
+            )
 
             with torch.inference_mode():
                 metrics = await asyncio.to_thread(

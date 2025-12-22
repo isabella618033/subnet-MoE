@@ -85,19 +85,15 @@ def start_model_from(
 
     # --- Return based on more updated version ---
     if secondary_model_meta >= primary_model_meta and latest_secondary_ckpt is not None:
-        # logger.info(
-        #     f"secondary checkpoint version {secondary_model_meta} >= \nprimary checkpoint version {primary_model_meta}"
-        # )
+        logger.info(f"Start model from {secondary_model_meta}")
         return secondary_ckpt_found, secondary_model_meta, latest_secondary_ckpt
     else:
-        # logger.info(
-        #     f"primary checkpoint version {primary_model_meta} >= \nsecondary checkpoint version {secondary_model_meta}"
-        # )
+        logger.info(f"Start model from {primary_model_meta}")
         return primary_ckpt_found, primary_model_meta, latest_primary_ckpt
 
 
 def get_resume_info(
-    rank: int, config: MinerConfig | ValidatorConfig, path: Path | None = None
+    rank: int, config: MinerConfig | ValidatorConfig, path: Path | None = None, msg: str = ""
 ) -> tuple[bool, ModelMeta, Path | None]:
     """
     Retrieves the resume information for a given rank and checkpoint configuration.
@@ -126,20 +122,20 @@ def get_resume_info(
 
         except FileNotFoundError:
             logger.info(
-                "Looking for checkpoint from folder", result="folder not found", path={config.ckpt.checkpoint_path}
+                f"Get resume info from folder {msg}", result="folder not found", path={config.ckpt.checkpoint_path}
             )
             return False, ModelMeta(), None
 
         if len(ckpt_files) == 0:
             logger.info(
-                "Looking for checkpoint from folder", result="dosent exist any file", path={config.ckpt.checkpoint_path}
+                f"Get resume info from folder {msg}", result="doesnt exist any file", path={config.ckpt.checkpoint_path}
             )
             return False, ModelMeta(), None
 
         latest_ckpt = ckpt_files[0].path
         model_meta = ckpt_files[0]
         logger.info(
-            "Looking for checkpoint from folder",
+            "Get resume info from folder",
             result="found",
             path={config.ckpt.checkpoint_path},
             model_meta=model_meta,
@@ -456,7 +452,7 @@ def get_sorted_checkpoints(checkpoint_path: str) -> dict[ModelMeta]:
 
         # ensure both fields exist and are numeric
         model_meta = ModelMeta(
-            global_ver=int(meta.get("globalver", -1)), inner_opt=int(meta.get("inneropt", -1)), path=Path(f)
+            global_ver=int(meta.get("globalver", 0)), inner_opt=int(meta.get("inneropt", 0)), path=Path(f)
         )
         ckpt_files.append(model_meta)
 
@@ -482,7 +478,7 @@ def delete_old_checkpoints(checkpoint_path: str, topk: int) -> list[str]:
     sorted_ckpt_files = get_sorted_checkpoints(checkpoint_path)
 
     ckpt_deleted = []
-    for model_meta in sorted_ckpt_files[:-topk]:
+    for model_meta in sorted_ckpt_files[topk:]:
         fs.rm(str(model_meta.path), recursive=True)
         ckpt_deleted.append(str(model_meta.path))
     return ckpt_deleted

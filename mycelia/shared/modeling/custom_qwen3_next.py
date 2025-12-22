@@ -70,7 +70,8 @@ class TopKRouter(nn.Module):
 @torch._dynamo.disable
 def _compute_overlap(expert_hit, available_experts):
     expert_hit_set = set(expert_hit.detach().cpu().flatten().tolist())
-    return sorted(expert_hit_set.intersection(available_experts))
+    available_experts_set = set(available_experts.tolist())
+    return torch.tensor(sorted(expert_hit_set.intersection(available_experts_set))).view(-1, 1)
 
 
 class SparseMoeBlock(Qwen3NextSparseMoeBlock):
@@ -104,7 +105,6 @@ class SparseMoeBlock(Qwen3NextSparseMoeBlock):
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """ """
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         # router_logits: (batch * sequence_length, n_experts)
@@ -132,7 +132,6 @@ class SparseMoeBlock(Qwen3NextSparseMoeBlock):
             # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
             current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
             current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-
             # However `index_add_` only support torch tensors for indexing so we'll use
             # the `top_x` tensor here.
             final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
@@ -143,6 +142,7 @@ class SparseMoeBlock(Qwen3NextSparseMoeBlock):
         final_hidden_states = final_hidden_states + shared_expert_output
 
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+
         return final_hidden_states, router_logits
 
 

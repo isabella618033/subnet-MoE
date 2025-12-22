@@ -61,24 +61,22 @@ def scheduler_service(
     download_queue: Queue,
     commit_queue: Queue,
     submit_queue: Queue,
-    poll_fallback_seconds: float = 5.0,
+    poll_fallback_block: int = 3,
 ):
     """
     Periodically checks whether to start download/submit phases and enqueues jobs.
     """
     while True:
         # --------- DOWNLOAD SCHEDULING ---------
-        wait_till(config, phase_name=PhaseNames.distribute, poll_fallback_seconds=poll_fallback_seconds)
+        wait_till(config, phase_name=PhaseNames.distribute, poll_fallback_block=poll_fallback_block)
         download_queue.put(Job(job_type=JobType.DOWNLOAD))
 
         # --------- COMISSION SCHEDULING ---------
-        _, phase_end_block = wait_till(
-            config, phase_name=PhaseNames.commit, poll_fallback_seconds=poll_fallback_seconds
-        )
+        _, phase_end_block = wait_till(config, phase_name=PhaseNames.commit, poll_fallback_block=poll_fallback_block)
         commit_queue.put(Job(job_type=JobType.COMMIT, phase_end_block=phase_end_block))
 
         # --------- SUBMISSION SCHEDULING ---------
-        wait_till(config, phase_name=PhaseNames.submission, poll_fallback_seconds=poll_fallback_seconds)
+        wait_till(config, phase_name=PhaseNames.submission, poll_fallback_block=poll_fallback_block)
         submit_queue.put(Job(job_type=JobType.SUBMIT))
 
 
@@ -115,14 +113,14 @@ def download_worker(
                 expert_group_ids=[config.task.expert_group_id],
             )
 
-            logger.info(f"<{PhaseNames.distribute}> downloaded model metadata from chain: {download_meta}.")
-
             if (
                 not isinstance(download_meta, dict)
-                or "model_version" not in download_meta
+                or "global_ver" not in download_meta
                 or "model_hash" not in download_meta
             ):
-                raise FileNotReadyError(f"No successful download: {download_meta}")
+                raise FileNotReadyError(f"No qualifying download destination: {download_meta}")
+
+            logger.info(f"<{PhaseNames.distribute}> downloaded model metadata from chain: {download_meta}.")
 
             # Update shared state with new version/hash
             _, current_model_meta, _ = start_model_from(
@@ -133,13 +131,8 @@ def download_worker(
             )
 
             with shared_state.lock:
-                shared_state.current_model_version = current_model_meta.model_version
+                shared_state.current_model_version = current_model_meta.global_ver
                 shared_state.current_model_hash = current_model_meta.model_hash
-
-            delete_old_checkpoints(
-                config.ckpt.validator_checkpoint_path,
-                config.ckpt.checkpoint_topk,
-            )
 
         except FileNotReadyError as e:
             logger.warning(f"<{PhaseNames.distribute}> File not ready error: {e}")
@@ -150,7 +143,7 @@ def download_worker(
 
         finally:
             download_queue.task_done()
-            logger.info(f"<{PhaseNames.distribute}> obligation completed.")
+            logger.info(f"<{PhaseNames.distribute}> task completed.")
 
 
 def commit_worker(
@@ -166,7 +159,7 @@ def commit_worker(
     while True:
         job = commit_queue.get()
         try:
-            _, _, latest_checkpoint_path = get_resume_info(rank=0, config=config)
+            _, model_meta, latest_checkpoint_path = get_resume_info(rank=0, config=config)
 
             with shared_state.lock:
                 shared_state.latest_checkpoint_path = latest_checkpoint_path
@@ -177,12 +170,19 @@ def commit_worker(
             model_path = f"{latest_checkpoint_path}/model.pt"
             model_hash = get_model_hash(compile_full_state_dict_from_path(model_path)).hex()
 
+            logger.info(
+                f"<{PhaseNames.commit}> committing model version {model_meta.global_ver} with hash {model_hash}."
+            )
             commit_status(
                 config,
                 wallet,
                 subtensor,
                 MinerChainCommit(
-                    expert_group=config.task.expert_group_id, model_hash=model_hash, block=subtensor.block
+                    expert_group=config.task.expert_group_id,
+                    model_hash=model_hash,
+                    block=subtensor.block,
+                    global_ver=model_meta.global_ver,
+                    inner_opt=model_meta.inner_opt,
                 ),
             )
 
@@ -195,7 +195,7 @@ def commit_worker(
 
         finally:
             commit_queue.task_done()
-            logger.info(f"<{PhaseNames.commit}> completed.")
+            logger.info(f"<{PhaseNames.commit}> task completed.")
 
 
 def submit_worker(
@@ -245,11 +245,11 @@ def submit_worker(
 
         finally:
             submit_queue.task_done()
-            logger.info(f"<{PhaseNames.submission}> obligation completed.")
+            logger.info(f"<{PhaseNames.submission}> task completed.")
 
 
 # --- Wiring it all together ---
-def run_system(config, wallet, current_model_version: int = -1, current_model_hash: str = "xxx"):
+def run_system(config, wallet, current_model_version: int = 0, current_model_hash: str = "xxx"):
     download_queue = Queue()
     commit_queue = Queue()
     submit_queue = Queue()

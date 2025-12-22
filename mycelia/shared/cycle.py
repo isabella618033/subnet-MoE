@@ -49,13 +49,13 @@ class PhaseNames:
     merge: str = "Merge"  # validator merge
 
 
-def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_seconds: int = 5):
+def wait_till(config: MinerConfig, phase_name: PhaseNames, poll_fallback_block: int = 3):
     should_submit = False
     logger.info(f"<{phase_name}> waiting to begin...")
     while not should_submit:
         should_submit, blocks_till, phase_response = should_act(config, phase_name)
         if should_submit is False and blocks_till > 0:
-            sleep_sec = min(blocks_till, max(poll_fallback_seconds, blocks_till / 3)) * 12
+            sleep_sec = min(blocks_till, max(poll_fallback_block, blocks_till * 0.9)) * 12
 
             check_time = datetime.now() + timedelta(seconds=sleep_sec)
             check_time_str = check_time.strftime("%H:%M:%S")
@@ -79,10 +79,14 @@ def search_model_submission_destination(
 ) -> bittensor.Axon:
     validator_miner_assignment = get_validator_miner_assignment(config, subtensor)
 
+    assigned_validator_hotkey = None
     for validator, miners in validator_miner_assignment.items():
         if wallet.hotkey.ss58_address in miners:
             assigned_validator_hotkey = validator
             break
+
+    if assigned_validator_hotkey is None:
+        return None
 
     metagraph = subtensor.metagraph(netuid=config.chain.netuid)
     uid = metagraph.hotkeys.index(assigned_validator_hotkey)

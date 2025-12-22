@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 import bittensor
+import torch
 from torch import nn
 
 from mycelia.shared.app_logging import structlog
@@ -19,6 +20,13 @@ from mycelia.shared.modeling.mycelia import get_base_model
 
 logger = structlog.get_logger(__name__)
 
+def grad_hook(name):
+    def h(grad):
+        if grad is not None and not torch.isfinite(grad).all():
+            print("❌ grad NaN/Inf at", name)
+            raise RuntimeError(name)
+        return grad
+    return h
 
 def freeze_parameters(
     model: nn.Module,
@@ -40,12 +48,18 @@ def freeze_parameters(
     for name, param in model.named_parameters():
         layer_id, expert_id = get_layer_expert_id(name)
 
-        if (
-            layer_id is not None
-            and expert_id is not None
-            and expert_id not in expert_manager.expert_group_assignment[expert_group_id][layer_id]
-        ):
+        if layer_id is not None and expert_id is not None:
+            allowed_experts = {
+                allowed_expert_id
+                for allowed_expert_id, _ in expert_manager.expert_group_assignment[expert_group_id].get(layer_id, [])
+            }
+            param.requires_grad_(expert_id in allowed_experts)
+        else:
             param.requires_grad_(False)
+
+        # if param.requires_grad:
+        #     param.register_hook(grad_hook(name))
+
 
     return model
 

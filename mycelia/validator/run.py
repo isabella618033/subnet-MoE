@@ -302,7 +302,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
         subtensor,
         ValidatorChainCommit(
             model_hash=None,
-            model_version=global_opt_step,
+            global_ver=global_opt_step,
             expert_group=config.task.expert_group_id,
             miner_seed=0,  # this should reveal later
             block=subtensor.block,
@@ -335,7 +335,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 subtensor,
                 ValidatorChainCommit(
                     model_hash=current_model_hash,
-                    model_version=global_opt_step,
+                    global_ver=global_opt_step,
                     expert_group=config.task.expert_group_id,
                     miner_seed=secrets.randbits(16),
                     block=subtensor.block,
@@ -431,7 +431,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 subtensor,
                 ValidatorChainCommit(
                     model_hash=current_model_hash,
-                    model_version=global_opt_step,
+                    global_ver=global_opt_step,
                     expert_group=config.task.expert_group_id,
                     miner_seed=0,
                     block=subtensor.block,

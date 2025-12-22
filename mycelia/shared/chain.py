@@ -13,7 +13,7 @@ import bittensor
 from pydantic import BaseModel, ConfigDict, Field
 
 from mycelia.shared.app_logging import structlog
-from mycelia.shared.checkpoint import ModelMeta
+from mycelia.shared.checkpoint import ModelMeta, delete_old_checkpoints
 from mycelia.shared.client import download_model
 from mycelia.shared.config import WorkerConfig
 from mycelia.shared.schema import verify_message
@@ -43,19 +43,21 @@ class WorkerChainCommit(BaseModel):
 
 
 class ValidatorChainCommit(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)  # allow both field names + aliases
-
+    model_config = ConfigDict(populate_by_name=True)
     model_hash: str | None = Field(default=None, alias="h")
-    model_version: int | None = Field(default=None, alias="v")
+    global_ver: int | None = Field(default=None, alias="v")
     expert_group: int | None = Field(default=None, alias="e")
     miner_seed: int | None = Field(default=None, alias="s")
     block: int | None = Field(default=None, alias="b")
 
 
 class MinerChainCommit(BaseModel):
-    block: int
-    expert_group: int | None = None
-    model_hash: str | None = None
+    model_config = ConfigDict(populate_by_name=True)
+    block: int = Field(alias="b")
+    expert_group: int | None = Field(default=None, alias="e")
+    model_hash: str | None = Field(default=None, alias="h")
+    global_ver: int | None = Field(default=0, alias="v")
+    inner_opt: int | None = Field(default=0, alias="i")
 
 
 def commit_status(
@@ -107,7 +109,7 @@ def get_chain_commits(
 
             chain_commit = (
                 ValidatorChainCommit.model_validate(status_dict)
-                if "miner_seed" in status_dict or 's' in status_dict
+                if "miner_seed" in status_dict or "s" in status_dict
                 else MinerChainCommit.model_validate(status_dict)
             )
 
@@ -156,13 +158,20 @@ def scan_chain_for_new_model(
     """
     commits: tuple[WorkerChainCommit, bittensor.Neuron] = get_chain_commits(config, subtensor)
 
-    max_model_version = max([getattr(c, "model_version", 0) for c, n in commits])
-    max_model_meta = ModelMeta(global_ver=max_model_version)
+    max_model_meta = ModelMeta(
+        global_ver=max(
+            (c.global_ver for c, n in commits if c is not None and getattr(c, "global_ver", None) is not None),
+            default=0,
+        )
+    )
 
     if current_model_meta is not None:
         logger.info(
-            "Scanning chain for new model",
+            "Scan chain: Max model version on chain",
             max_model_version_on_chain=max_model_meta,
+        )
+        logger.info(
+            "Scan chain: Local model version",
             current_model_version=current_model_meta,
         )
         max_model_meta = max(max_model_meta, current_model_meta)
@@ -174,11 +183,11 @@ def scan_chain_for_new_model(
 
     # 1) collect candidates that are newer than the current version
     most_updated_commits = []  # type: ignore
-    for (c, n) in commits:
-        model_ver = getattr(c, "model_version", 0)
-        if ModelMeta(global_ver = model_ver) >= max_model_meta:
+    for c, n in commits:
+        raw_ver = getattr(c, "global_ver", None)
+        global_ver = raw_ver if isinstance(raw_ver, int) else 0
+        if ModelMeta(global_ver=global_ver) >= max_model_meta:
             most_updated_commits.append((c, n))
-
 
     if len(most_updated_commits) == 0:
         return False, []
@@ -202,7 +211,7 @@ def scan_chain_for_new_model(
                     "ip": neuron.axon_info.ip,
                     "port": neuron.axon_info.port,
                     "model_hash": commit.model_hash,
-                    "model_version": commit.model_version,
+                    "global_ver": commit.global_ver,
                     "target_hotkey_ss58": neuron.hotkey,
                 }
             )
@@ -225,7 +234,7 @@ def fetch_model_from_chain(
 ) -> dict | None:
     should_download, download_metas = scan_chain_for_new_model(current_model_meta, config, subtensor)
 
-    logger.info("Fetching model from chain", should_download=should_download)
+    logger.info("Fetching model from chain", should_download=should_download, download_metas=download_metas)
 
     if should_download and download_metas:
         download_success = False
@@ -235,7 +244,7 @@ def fetch_model_from_chain(
 
         while (not download_success) and (retries < max_retries):
             for download_meta in download_metas:
-                logger.info("Downloading from candidate", download_meta)
+                logger.info(f"Downloading from chain: uid = {download_meta['uid']}", download_meta=download_meta)
 
                 # Resolve URL if not provided; fall back to ip/port + default route
                 url = download_meta.get("url")
@@ -251,7 +260,7 @@ def fetch_model_from_chain(
                         continue
 
                 out_folder = Path(config.ckpt.validator_checkpoint_path) / (
-                    f"uid_{download_meta.get('uid')}_hotkey_{download_meta.get('target_hotkey_ss58')}_globalver_{download_meta.get('model_version')}"
+                    f"uid_{download_meta.get('uid')}_hotkey_{download_meta.get('target_hotkey_ss58')}_globalver_{download_meta.get('global_ver')}"
                 )
 
                 out_folder.mkdir(parents=True, exist_ok=True)
@@ -278,7 +287,7 @@ def fetch_model_from_chain(
                         )
                         # If download_model doesn't raise, consider it a success
                         download_success = True
-                        current_model_version = download_meta["model_version"]
+                        current_model_version = download_meta["global_ver"]
                         current_model_hash = download_meta["model_hash"]
                         logger.info(
                             "✅ Downloaded checkpoint",
@@ -286,6 +295,12 @@ def fetch_model_from_chain(
                             current_model_version=current_model_version,
                             current_model_hash=current_model_hash,
                         )
+
+                        delete_old_checkpoints(
+                            checkpoint_path=Path(config.ckpt.validator_checkpoint_path),
+                            topk=config.ckpt.checkpoint_topk,
+                        )
+
                         return download_meta
                     except Exception as e:
                         logger.warning("Download failed", url, e)
