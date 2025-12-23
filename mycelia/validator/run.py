@@ -54,7 +54,7 @@ configure_logging()
 logger = structlog.get_logger(__name__)
 
 
-def cleanup() -> None:
+def cleanup(global_model, base_model) -> None:
     """
     Cleans up the distributed training environment.
 
@@ -62,6 +62,10 @@ def cleanup() -> None:
         None
     """
     torch.cuda.synchronize()
+    global_model.to("cpu")
+    base_model.to("cpu")
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 def setup_training(
@@ -224,14 +228,6 @@ def run_global_optimization(
         new_sum=round(float(new_expert_sum), 6),
     )
 
-    global_model.to("cpu")
-    del old_shared_name, old_shared_sum
-    del old_expert_name, old_expert_sum
-    del new_shared_name, new_shared_sum
-    del new_expert_name, new_expert_sum
-    gc.collect()
-    torch.cuda.empty_cache()
-
 
 def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
     """
@@ -326,7 +322,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
             # for each global_opt_interval number of inner_opt_step, we synchronise weight from different ddp worker, and then run global optimization
 
             # === Wait till commit phase to submit random seed ===
-            _, phase_end_block = wait_till(config, PhaseNames.commit)
+            wait_till(config, PhaseNames.commit)
             logger.info("(0) Commit new seed for next validation")
 
             commit_status(
@@ -357,26 +353,24 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 run_evaluation(
                     config=config,
                     step=global_opt_step,
-                    device=device,
+                    device=device,  # operate at cuda
                     miners=miner_jobs,
                     score_aggregator=score_aggregator,
-                    base_model=copy.deepcopy(base_model).to(device),
+                    base_model=base_model.to("cpu"),
                     tokenizer=tokenizer,
                     combinded_seed=get_combined_validator_seed(config, subtensor),
                 )
             )
 
-            gc.collect()
-            torch.cuda.empty_cache()
-
+            cleanup(global_model, base_model)
             logger.info("eval result", scores=score_aggregator.uid_score_pairs())
 
             # === aggragate miner gradient change locally ===
             logger.info("(4) Aggregating miner gradient change")
             asyncio.run(
                 aggregate_miner_gradient_change(
-                    base_model=base_model,
-                    global_model=global_model,
+                    base_model=base_model.to("cpu"),
+                    global_model=global_model.to("cpu"),
                     device=torch.device("cpu"),  # all gradient aggregation done on cpu
                     rank=rank,
                     outer_optimizer=outer_optimizer,
@@ -394,7 +388,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
             logger.info("(6) Running global model optimization step")
             run_global_optimization(
                 model=base_model,
-                global_model=global_model.to(device),
+                global_model=global_model.to("cpu"),
                 device=device,
                 rank=rank,
                 outer_optimizer=outer_optimizer,
@@ -402,9 +396,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
                 score_aggregator=score_aggregator,
             )
 
-            global_model.to("cpu")
-            gc.collect()
-            torch.cuda.empty_cache()
+            cleanup(global_model, base_model)
 
             # === save checkpoint ===
             logger.info("(7) Saving checkpoint")
@@ -448,7 +440,7 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
             val_metric = evaluate_model(
                 rank=rank,
                 step=global_opt_step,
-                model=global_model.to(device),
+                model=global_model.to("cpu"),
                 eval_dataloader=eval_dataloader,
                 device=device,
             )
@@ -469,15 +461,18 @@ def run(rank: int, world_size: int, config: ValidatorConfig) -> None:
             )
 
             metric_logger.log(metrics)
+            cleanup(global_model, base_model)
 
-            # # === Clean up ===
-            # loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
-            # aux_loss_batch = torch.tensor(0, dtype=torch.float32, device=device)
-            # gc.collect()
-            # torch.cuda.empty_cache()%
-
+            # === Clean up ===
             global_opt_step += 1
 
+    except KeyboardInterrupt:
+        logger.warning("KeyboardInterrupt received, shutting down validator loop")
+        cleanup()
+        metric_logger.close()
+        for _, a in group_averagers.items():
+            a.shutdown()
+        raise
     except Exception:
         logger.error("Quit training", exc_info=True)
         cleanup()

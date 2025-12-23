@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import asyncio
 from dataclasses import dataclass
 
@@ -32,7 +33,7 @@ EVAL_MAX_BATCHES = 50
 
 def load_model_from_path(path: str, base_model, device: torch.device) -> nn.Module:
     sd = torch.load(path, map_location=torch.device("cpu"))["model_state_dict"]
-    base_model.load_state_dict(sd, strict=False)
+    copy.deepcopy(base_model).load_state_dict(sd, strict=False)
     return base_model.to(device)
 
 
@@ -81,7 +82,7 @@ async def evaluator_worker(
             logger.info(f"{name}: uid={job.uid} score={score:.4f}")
 
             # Explicit cleanup
-            del eval_dataloader, model
+            del eval_dataloader, model, metrics
             gc.collect()
             torch.cuda.empty_cache()
 

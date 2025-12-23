@@ -122,7 +122,7 @@ class ExpertManager:
         expert_assignments: ExpertAssignments = {}
 
         for task_folder in task_folders:
-            logger.info("load_expert_group_assignment - folder", task_folder)
+            logger.debug("loading expert group assignment from folder", task_folder)
             # Load per-task config (to get expert_group_id)
             task_config = TaskCfg.from_path(task_folder / "config.yaml")
 

@@ -147,9 +147,7 @@ async def get_checkpoint(
     expert_group_id: int | str | None = Form(None, description="List of expert groups to fetch"),
 ):
     """GET to download the configured checkpoint immediately."""
-    logger.info("checkpoint, A")
     require_auth(authorization)
-    logger.info("checkpoint, B")
 
     verify_message(
         origin_hotkey_ss58=origin_hotkey_ss58,
@@ -161,7 +159,6 @@ async def get_checkpoint(
     )
 
     resume, model_meta, latest_checkpoint_path = get_resume_info(rank=0, config=config)
-    logger.info("checkpoint, C", latest_checkpoint_path)
 
     if not latest_checkpoint_path:
         raise HTTPException(status_code=500, detail="CHECKPOINT_PATH env var is not set")
@@ -177,15 +174,11 @@ async def get_checkpoint(
     else:
         ckpt_path = latest_checkpoint_path / "model.pt"
 
-    logger.info("checkpoint, E", ckpt_path=ckpt_path)
-
     if not ckpt_path.exists():
         raise HTTPException(
             status_code=404,
             detail=f"Checkpoint not found: {ckpt_path.name}",
         )
-
-    logger.info("checkpoint, F", ckpt_path=ckpt_path)
 
     result = file_response_for(Path(ckpt_path), f"step{model_meta.global_ver}")
 

@@ -20,13 +20,16 @@ from mycelia.shared.modeling.mycelia import get_base_model
 
 logger = structlog.get_logger(__name__)
 
+
 def grad_hook(name):
     def h(grad):
         if grad is not None and not torch.isfinite(grad).all():
             print("❌ grad NaN/Inf at", name)
             raise RuntimeError(name)
         return grad
+
     return h
+
 
 def freeze_parameters(
     model: nn.Module,
@@ -59,7 +62,6 @@ def freeze_parameters(
 
         # if param.requires_grad:
         #     param.register_hook(grad_hook(name))
-
 
     return model
 

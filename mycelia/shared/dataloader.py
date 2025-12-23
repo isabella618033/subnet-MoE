@@ -101,7 +101,7 @@ class DefaultStreamingTorchDataset(TorchIterableDataset):
             max_int = 2**256 - 1
             threshold = int(max_int * fraction)
 
-            logger.info("Applying fractional subsampling", seed=seed, fraction=fraction, threshold=threshold)
+            logger.debug("Applying fractional subsampling", seed=seed, fraction=fraction, threshold=threshold)
 
             # `with_indices=True` gives us a stable index per element in the stream.
             # Wrap with partial instead of relying on fn_kwargs to keep worker execution simple.

@@ -85,10 +85,10 @@ def start_model_from(
 
     # --- Return based on more updated version ---
     if secondary_model_meta >= primary_model_meta and latest_secondary_ckpt is not None:
-        logger.info(f"Start model from {secondary_model_meta}")
+        logger.info("Start model from", secondary_model_meta)
         return secondary_ckpt_found, secondary_model_meta, latest_secondary_ckpt
     else:
-        logger.info(f"Start model from {primary_model_meta}")
+        logger.info("Start model from", primary_model_meta)
         return primary_ckpt_found, primary_model_meta, latest_primary_ckpt
 
 
@@ -121,20 +121,20 @@ def get_resume_info(
             ckpt_files = get_sorted_checkpoints(path)
 
         except FileNotFoundError:
-            logger.info(
+            logger.debug(
                 f"Get resume info from folder {msg}", result="folder not found", path={config.ckpt.checkpoint_path}
             )
             return False, ModelMeta(), None
 
         if len(ckpt_files) == 0:
-            logger.info(
+            logger.debug(
                 f"Get resume info from folder {msg}", result="doesnt exist any file", path={config.ckpt.checkpoint_path}
             )
             return False, ModelMeta(), None
 
         latest_ckpt = ckpt_files[0].path
         model_meta = ckpt_files[0]
-        logger.info(
+        logger.debug(
             "Get resume info from folder",
             result="found",
             path={config.ckpt.checkpoint_path},

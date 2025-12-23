@@ -55,12 +55,15 @@ def evaluate_model(
                 outputs = model(**device_batch)
 
                 if not torch.isnan(outputs.loss):
-                    loss_sum += float(outputs.loss.detach().item())
+                    loss_sum += float(outputs.loss.item())
+
                 aux_loss_sum += (
-                    float(outputs.aux_loss.detach().item())
+                    float(outputs.aux_loss.item())
                     if hasattr(outputs, "aux_loss") and outputs.aux_loss is not None
                     else 0
                 )
+
+                del outputs
 
             del device_batch
 

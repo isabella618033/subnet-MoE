@@ -52,16 +52,16 @@ class TopKRouter(nn.Module):
         shape[dim] = x.size(dim)
         mask = mask_1d.view(shape).to(dtype=x.dtype)
 
-        mask_bool = mask.to(torch.bool)              # True = keep
-        fill = x.min() - 2                           # scalar, computed BEFORE masking
+        mask_bool = mask.to(torch.bool)  # True = keep
+        fill = x.min() - 2  # scalar, computed BEFORE masking
         x_masked = x.masked_fill(~mask_bool, fill)
         return x_masked
 
     def forward(self, hidden_states):
         router_logits = self.weight(hidden_states)
 
-        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float) #a
-        routing_weights = self._mask_routing_weights(router_logits) #b
+        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)  # a
+        routing_weights = self._mask_routing_weights(router_logits)  # b
         routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
         if self.norm_topk_prob:
             routing_weights /= routing_weights.sum(dim=-1, keepdim=True)

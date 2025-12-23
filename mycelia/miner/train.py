@@ -143,7 +143,8 @@ def setup_training(
     # === scaler ===
     logger.info(f"init - inner scaler")
     inner_scaler = torch.amp.GradScaler(
-        "cuda", enabled = False # enabled=(get_nested_attr(config, "model.precision", "") == "fp16-mixed")
+        "cuda",
+        enabled=False,  # enabled=(get_nested_attr(config, "model.precision", "") == "fp16-mixed")
     )
 
     # === dataloader ===
@@ -289,7 +290,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
 
                 loss_batch += loss.item()
                 aux_loss_batch += aux_loss.item()
-                logger.info("traing", loss = loss, grad_sum=sum_model_gradients(model))
+                logger.info("training", loss=loss, grad_sum=sum_model_gradients(model))
 
                 inner_scaler.scale(loss).backward()
 
@@ -304,12 +305,14 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                 for n, p in model.named_parameters():
                     if p.grad is None or torch.isnan(p.grad.sum()):
                         continue
-                    # dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+                    dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
                     p.grad.div_(world_size)
 
                 inner_scaler.unscale_(optimizer=inner_optimizer)
 
-                grad_norm = clip_grad_norm_([p for p in model.parameters() if p.grad is not None and not torch.isnan(p.grad.sum())], 1.0)  # gradient clipping # <- turned grad to nan
+                grad_norm = clip_grad_norm_(
+                    [p for p in model.parameters() if p.grad is not None and not torch.isnan(p.grad.sum())], 1.0
+                )  # gradient clipping # <- turned grad to nan
 
                 scale_before = inner_scaler.get_scale() if inner_scaler.is_enabled() else None
                 step_result = inner_scaler.step(inner_optimizer)
@@ -321,7 +324,7 @@ def train_worker(rank: int, world_size: int, config: MinerConfig) -> None:
                         grad_norm=float(grad_norm),
                         scale_before=scale_before,
                     )
-                
+
                 else:
                     logger.info(
                         "Optimizer step applied",

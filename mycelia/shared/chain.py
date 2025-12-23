@@ -167,15 +167,19 @@ def scan_chain_for_new_model(
 
     if current_model_meta is not None:
         logger.info(
-            "Scan chain: Max model version on chain",
+            "Scan chain - Max model version on chain",
             max_model_version_on_chain=max_model_meta,
         )
         logger.info(
-            "Scan chain: Local model version",
+            "Scan chain - Local model version",
             current_model_version=current_model_meta,
         )
         max_model_meta = max(max_model_meta, current_model_meta)
 
+    logger.info(
+        "Scan chain - Max model meta",
+        max_model_meta=max_model_meta,
+    )
     # 0) Download only from validator
     # commits = [(c, n) for c, n in commits if n.validator_permit]
     commits = [(c, n) for c, n in commits if getattr(c, "miner_seed", False)]
